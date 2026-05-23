@@ -10,6 +10,7 @@ from app.config.settings import Settings
 from app.database.connection import DatabaseManager
 from app.http import create_app
 from app.services.gamification_service import GamificationService
+from app.services.gloria_service import GloriaService
 
 
 async def main() -> None:
@@ -24,10 +25,12 @@ async def main() -> None:
     database_manager = DatabaseManager(settings.database_url)
     await database_manager.connect()
 
+    gloria_service = GloriaService(settings.gloria_base_url)
     gamification_service = GamificationService(
         alert_repository=database_manager.alert_repository,
         player_repository=database_manager.player_repository,
         point_log_repository=database_manager.point_log_repository,
+        gloria_service=gloria_service,
     )
 
     app = create_app(settings, database_manager, gamification_service)

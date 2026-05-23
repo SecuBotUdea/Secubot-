@@ -1,16 +1,21 @@
 from __future__ import annotations
 
+import logging
+
 from app.database.connection import AlertAlreadyResolvedError, AlertNotFoundError, points_for_severity
 from app.models.alert import AlertRecord
 from app.models.point_log import PointLogRecord
 from app.schemas.common import AlertPayload, RescanResultPayload
 
+logger = logging.getLogger(__name__)
+
 
 class GamificationService:
-    def __init__(self, alert_repository, player_repository, point_log_repository) -> None:
+    def __init__(self, alert_repository, player_repository, point_log_repository, gloria_service=None) -> None:
         self.alert_repository = alert_repository
         self.player_repository = player_repository
         self.point_log_repository = point_log_repository
+        self._gloria = gloria_service
 
     async def handle_alert(self, payload: AlertPayload) -> dict:
         alert = AlertRecord(
@@ -31,11 +36,21 @@ class GamificationService:
         if alert.get("status") == "resolved":
             raise AlertAlreadyResolvedError(payload.alert_id)
 
+        guild_id = alert.get("guild_id", "")
+        channel_id = alert.get("channel_id", "")
+
         if payload.status != "valid":
+            await self._notify_gloria(
+                guild_id=guild_id,
+                channel_id=channel_id,
+                alert_id=payload.alert_id,
+                user_id=payload.user_id,
+                status=payload.status,
+                points=0,
+            )
             return {"status": "no_points", "alert_id": payload.alert_id}
 
         severity = alert.get("severity")
-        guild_id = alert.get("guild_id")
         points = points_for_severity(severity)
 
         await self.player_repository.add_points(payload.user_id, guild_id, points)
@@ -49,7 +64,24 @@ class GamificationService:
             )
         )
 
+        await self._notify_gloria(
+            guild_id=guild_id,
+            channel_id=channel_id,
+            alert_id=payload.alert_id,
+            user_id=payload.user_id,
+            status=payload.status,
+            points=points,
+        )
+
         return {"status": "points_awarded", "points": points, "alert_id": payload.alert_id}
+
+    async def _notify_gloria(self, **kwargs) -> None:
+        if self._gloria is None:
+            return
+        try:
+            await self._gloria.notify_rescan_result(**kwargs)
+        except Exception:
+            logger.exception("Failed to notify Gloria; rescan result was already persisted")
 
     async def get_player_detail(self, guild_id: str, user_id: str) -> dict | None:
         player = await self.player_repository.get_player(user_id, guild_id)

@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
     environment: str = Field(default="development", alias="ENVIRONMENT")
     allowed_origins: str = Field(default="", alias="ALLOWED_ORIGINS")
+    gloria_base_url: str | None = Field(default=None, alias="GLORIA_URL")
 
     @property
     def cors_origins(self) -> list[str]:

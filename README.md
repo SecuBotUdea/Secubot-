@@ -7,7 +7,7 @@ Microservicio REST que actua como motor de gamificacion para un bot de Discord o
 El flujo principal tiene dos pasos:
 
 1. **Llega una alerta** — un sistema externo (ej. Wazuh/SIEM) envia la alerta via `POST /events/alert` con severidad y metadatos.
-2. **Un usuario la valida** — cuando el parser externo confirma que la correccion es valida, se notifica via `POST /events/rescan_result`. Si el estado es `"valid"`, el usuario recibe puntos segun la gravedad.
+2. **Un usuario la valida** — cuando el parser externo confirma que la correccion es valida, se notifica via `POST /events/rescan_result`. Si el estado es `"valid"`, el usuario recibe puntos segun la gravedad. Secubot notifica el resultado a **Gloria** (servicio de enrutamiento), que a su vez avisa al bot de Discord.
 
 | Severidad  | Puntos |
 |------------|--------|
@@ -69,8 +69,11 @@ secubot/
 │   ├── database/connection.py            # Repositorios Mongo + fallback en memoria
 │   ├── models/                           # Modelos de datos (Alert, Player, PointLog)
 │   ├── schemas/common.py                 # Schemas de entrada/salida de la API
-│   └── services/gamification_service.py  # Logica de negocio principal
-├── tests/test_http_endpoints.py          # Suite de tests de integracion
+│   ├── services/gamification_service.py  # Logica de negocio principal
+│   └── services/gloria_service.py        # Cliente HTTP para notificar a Gloria
+├── tests/
+│   ├── test_http_endpoints.py            # Tests de endpoints y gamificacion
+│   └── test_gloria_integration.py        # Tests de integracion con Gloria
 ├── Dockerfile
 ├── requirements.txt
 └── .env.example
@@ -85,6 +88,7 @@ secubot/
 | `LOG_LEVEL` | `INFO` | Nivel de logging (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
 | `ENVIRONMENT` | `development` | Entorno de ejecucion |
 | `ALLOWED_ORIGINS` | `` | Origenes CORS permitidos (separados por coma) |
+| `GLORIA_URL` | _(ninguno)_ | URL base del servicio Gloria (ej. `http://gloria:8001`). Si no se configura, las notificaciones se omiten silenciosamente. |
 
 ## Ejecucion
 
@@ -111,4 +115,10 @@ docker run -p 8000:8000 --env-file .env secubot
 pytest tests/
 ```
 
-El backend en memoria (`memory://`) se usa automaticamente en los tests, sin necesidad de una instancia de MongoDB.
+El backend en memoria (`memory://`) se usa automaticamente en los tests, sin necesidad de una instancia de MongoDB ni de una instancia de Gloria.
+
+La suite cubre:
+
+- Endpoints HTTP (respuestas, codigos de error, schemas)
+- Logica de gamificacion (puntos por severidad, proteccion contra doble otorgamiento)
+- Integracion con Gloria: payload correcto, fire-and-forget ante fallos, no-op sin `GLORIA_URL`
