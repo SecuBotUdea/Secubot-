@@ -39,22 +39,22 @@ def create_app(settings, database_manager, gamification_service) -> FastAPI:
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"Failed to process rescan result: {exc}") from exc
 
-    @app.get("/teams/{guild_id}/players/{user_id}", response_model=PlayerDetail)
-    async def player_detail(guild_id: str, user_id: str) -> PlayerDetail:
+    @app.get("/teams/{team_id}/players/{user_id}", response_model=PlayerDetail)
+    async def player_detail(team_id: str, user_id: str) -> PlayerDetail:
         try:
-            detail = await gamification_service.get_player_detail(guild_id, user_id)
+            detail = await gamification_service.get_player_detail(team_id, user_id)
             if detail is None:
-                raise HTTPException(status_code=404, detail=f"Player '{user_id}' not found in guild '{guild_id}'")
+                raise HTTPException(status_code=404, detail=f"Player '{user_id}' not found in guild '{team_id}'")
             return PlayerDetail(**detail)
         except HTTPException:
             raise
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"Failed to get player detail: {exc}") from exc
 
-    @app.get("/teams/{guild_id}/leaderboard", response_model=list[LeaderboardEntry])
-    async def leaderboard(guild_id: str) -> list[LeaderboardEntry]:
+    @app.get("/teams/{team_id}/leaderboard", response_model=list[LeaderboardEntry])
+    async def leaderboard(team_id: str) -> list[LeaderboardEntry]:
         try:
-            entries = await gamification_service.get_leaderboard(guild_id)
+            entries = await gamification_service.get_leaderboard(team_id)
             return [LeaderboardEntry(**e) for e in entries]
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"Failed to get leaderboard: {exc}") from exc

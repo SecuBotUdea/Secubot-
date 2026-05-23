@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 
 class PointLogRecord(BaseModel):
     user_id: str
-    guild_id: str
+    team_id: str
     alert_id: str
     points: int
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

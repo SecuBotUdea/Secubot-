@@ -2,16 +2,16 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-Severity = Literal["critical", "high", "medium", "low"]
+Severity = Literal["critical", "high", "medium", "low", "informational", "unknown"]
 
 
 class AlertPayload(BaseModel):
     alert_id: str
-    guild_id: str
+    team_id: str
     channel_id: str | None = None
     severity: Severity | None = None
-    source: str | None = None
-    description: str | None = None
+    source_type: str | None = None
+    title: str | None = None
 
 
 class RescanResultPayload(BaseModel):
@@ -34,7 +34,7 @@ class PointLogEntry(BaseModel):
 
 class PlayerDetail(BaseModel):
     user_id: str
-    guild_id: str
+    team_id: str
     points: int
     rank: int
     point_logs: list[PointLogEntry]

@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 class RemediationRecord(BaseModel):
     alert_id: str
     user_id: str
-    guild_id: str
+    team_id: str
     status: str
     points_awarded: int
     auto_trigger_rescan: bool = False

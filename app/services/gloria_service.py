@@ -12,7 +12,7 @@ class GloriaService:
     async def notify_rescan_result(
         self,
         *,
-        guild_id: str,
+        team_id: str,
         channel_id: str,
         alert_id: str,
         user_id: str,
@@ -29,7 +29,7 @@ class GloriaService:
             else f"Alert {alert_id} marked as invalid. No points awarded."
         )
         payload = {
-            "guild_id": guild_id,
+            "team_id": team_id,
             "channel_id": channel_id,
             "message_content": message_content,
             "embed_data": {

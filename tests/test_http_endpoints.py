@@ -29,18 +29,18 @@ class FakeGamificationService:
             return {"status": "points_awarded", "points": 75, "alert_id": payload.alert_id}
         return {"status": "no_points", "alert_id": payload.alert_id}
 
-    async def get_player_detail(self, guild_id: str, user_id: str) -> dict | None:
+    async def get_player_detail(self, team_id: str, user_id: str) -> dict | None:
         if user_id == "unknown":
             return None
         return {
             "user_id": user_id,
-            "guild_id": guild_id,
+            "team_id": team_id,
             "points": 100,
             "rank": 1,
             "point_logs": [{"alert_id": "a1", "points": 100, "timestamp": "2026-01-01T00:00:00+00:00"}],
         }
 
-    async def get_leaderboard(self, guild_id: str) -> list[dict]:
+    async def get_leaderboard(self, team_id: str) -> list[dict]:
         return [{"user_id": "user_1", "points": 100, "rank": 1}]
 
 
@@ -72,10 +72,10 @@ def test_receive_alert_endpoint(api_client) -> None:
         "/events/alert",
         json={
             "alert_id": "alert_123",
-            "guild_id": "111",
+            "team_id": "111",
             "severity": "high",
-            "source": "wazuh",
-            "description": "Suspicious login",
+            "source_type": "wazuh",
+            "title": "Suspicious login",
         },
     )
 
@@ -190,7 +190,7 @@ async def test_gamification_awards_points_by_severity() -> None:
     service = GamificationService(alerts, players, logs)
 
     await service.handle_alert(
-        AlertPayload(alert_id="a1", guild_id="g1", severity="critical")
+        AlertPayload(alert_id="a1", team_id="g1", severity="critical")
     )
     result = await service.handle_rescan_result(
         RescanResultPayload(alert_id="a1", user_id="u1", status="valid")
@@ -219,7 +219,7 @@ async def test_gamification_no_points_on_invalid() -> None:
     service = GamificationService(alerts, players, logs)
 
     await service.handle_alert(
-        AlertPayload(alert_id="a2", guild_id="g1", severity="high")
+        AlertPayload(alert_id="a2", team_id="g1", severity="high")
     )
     result = await service.handle_rescan_result(
         RescanResultPayload(alert_id="a2", user_id="u1", status="invalid")
@@ -264,7 +264,7 @@ async def test_gamification_already_resolved_alert_raises() -> None:
         alerts, InMemoryPlayerRepository(), InMemoryPointLogRepository()
     )
 
-    await service.handle_alert(AlertPayload(alert_id="a3", guild_id="g1", severity="low"))
+    await service.handle_alert(AlertPayload(alert_id="a3", team_id="g1", severity="low"))
     await service.handle_rescan_result(RescanResultPayload(alert_id="a3", user_id="u1", status="valid"))
 
     with pytest.raises(AlertAlreadyResolvedError):
@@ -290,7 +290,7 @@ async def test_remediation_logged_on_valid_rescan() -> None:
         remediation_repository=remediations,
     )
 
-    await service.handle_alert(AlertPayload(alert_id="a4", guild_id="g1", severity="high"))
+    await service.handle_alert(AlertPayload(alert_id="a4", team_id="g1", severity="high"))
     await service.handle_rescan_result(RescanResultPayload(alert_id="a4", user_id="u1", status="valid"))
 
     logs = await remediations.get_remediations_for_user("u1", "g1")
@@ -317,7 +317,7 @@ async def test_remediation_logged_on_invalid_rescan() -> None:
         remediation_repository=remediations,
     )
 
-    await service.handle_alert(AlertPayload(alert_id="a5", guild_id="g1", severity="medium"))
+    await service.handle_alert(AlertPayload(alert_id="a5", team_id="g1", severity="medium"))
     await service.handle_rescan_result(RescanResultPayload(alert_id="a5", user_id="u1", status="invalid"))
 
     logs = await remediations.get_remediations_for_user("u1", "g1")
@@ -343,7 +343,7 @@ async def test_remediation_logs_multiple_attempts() -> None:
         remediation_repository=remediations,
     )
 
-    await service.handle_alert(AlertPayload(alert_id="a6", guild_id="g1", severity="low"))
+    await service.handle_alert(AlertPayload(alert_id="a6", team_id="g1", severity="low"))
     await service.handle_rescan_result(RescanResultPayload(alert_id="a6", user_id="u1", status="invalid"))
     await service.handle_rescan_result(RescanResultPayload(alert_id="a6", user_id="u1", status="invalid"))
     await service.handle_rescan_result(RescanResultPayload(alert_id="a6", user_id="u1", status="valid"))

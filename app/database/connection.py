@@ -65,25 +65,25 @@ class InMemoryPlayerRepository:
     def __init__(self) -> None:
         self._players: dict[str, dict[str, Any]] = {}
 
-    def _key(self, user_id: str, guild_id: str) -> str:
-        return f"{user_id}:{guild_id}"
+    def _key(self, user_id: str, team_id: str) -> str:
+        return f"{user_id}:{team_id}"
 
-    async def add_points(self, user_id: str, guild_id: str, points: int) -> None:
-        key = self._key(user_id, guild_id)
+    async def add_points(self, user_id: str, team_id: str, points: int) -> None:
+        key = self._key(user_id, team_id)
         now = datetime.now(timezone.utc)
         if key not in self._players:
             self._players[key] = PlayerRecord(
-                user_id=user_id, guild_id=guild_id, points=0
+                user_id=user_id, team_id=team_id, points=0
             ).to_document()
             self._players[key]["created_at"] = now
         self._players[key]["points"] += points
         self._players[key]["updated_at"] = now
 
-    async def get_player(self, user_id: str, guild_id: str) -> dict[str, Any] | None:
-        return self._players.get(self._key(user_id, guild_id))
+    async def get_player(self, user_id: str, team_id: str) -> dict[str, Any] | None:
+        return self._players.get(self._key(user_id, team_id))
 
-    async def get_leaderboard(self, guild_id: str) -> list[dict[str, Any]]:
-        guild_players = [p for p in self._players.values() if p["guild_id"] == guild_id]
+    async def get_leaderboard(self, team_id: str) -> list[dict[str, Any]]:
+        guild_players = [p for p in self._players.values() if p["team_id"] == team_id]
         return sorted(guild_players, key=lambda p: p["points"], reverse=True)
 
 
@@ -94,8 +94,8 @@ class InMemoryPointLogRepository:
     async def add_log(self, log: PointLogRecord) -> None:
         self._logs.append(log.to_document())
 
-    async def get_logs_for_user(self, user_id: str, guild_id: str) -> list[dict[str, Any]]:
-        return [l for l in self._logs if l["user_id"] == user_id and l["guild_id"] == guild_id]
+    async def get_logs_for_user(self, user_id: str, team_id: str) -> list[dict[str, Any]]:
+        return [l for l in self._logs if l["user_id"] == user_id and l["team_id"] == team_id]
 
 
 class MongoAlertRepository:
@@ -107,11 +107,11 @@ class MongoAlertRepository:
             {"alert_id": alert.alert_id},
             {
                 "$set": {
-                    "guild_id": alert.guild_id,
+                    "team_id": alert.team_id,
                     "channel_id": alert.channel_id,
                     "severity": alert.severity,
-                    "source": alert.source,
-                    "description": alert.description,
+                    "source_type": alert.source_type,
+                    "title": alert.title,
                     "status": alert.status,
                 },
                 "$setOnInsert": {"opened_at": alert.opened_at},
@@ -139,10 +139,10 @@ class MongoPlayerRepository:
     def __init__(self, collection: Any) -> None:
         self._collection = collection
 
-    async def add_points(self, user_id: str, guild_id: str, points: int) -> None:
+    async def add_points(self, user_id: str, team_id: str, points: int) -> None:
         now = datetime.now(timezone.utc)
         await self._collection.update_one(
-            {"user_id": user_id, "guild_id": guild_id},
+            {"user_id": user_id, "team_id": team_id},
             {
                 "$inc": {"points": points},
                 "$set": {"updated_at": now},
@@ -151,11 +151,11 @@ class MongoPlayerRepository:
             upsert=True,
         )
 
-    async def get_player(self, user_id: str, guild_id: str) -> dict[str, Any] | None:
-        return await self._collection.find_one({"user_id": user_id, "guild_id": guild_id})
+    async def get_player(self, user_id: str, team_id: str) -> dict[str, Any] | None:
+        return await self._collection.find_one({"user_id": user_id, "team_id": team_id})
 
-    async def get_leaderboard(self, guild_id: str) -> list[dict[str, Any]]:
-        cursor = self._collection.find({"guild_id": guild_id}).sort("points", -1).limit(10)
+    async def get_leaderboard(self, team_id: str) -> list[dict[str, Any]]:
+        cursor = self._collection.find({"team_id": team_id}).sort("points", -1).limit(10)
         return await cursor.to_list(length=10)
 
 
@@ -166,8 +166,8 @@ class MongoPointLogRepository:
     async def add_log(self, log: PointLogRecord) -> None:
         await self._collection.insert_one(log.to_document())
 
-    async def get_logs_for_user(self, user_id: str, guild_id: str) -> list[dict[str, Any]]:
-        cursor = self._collection.find({"user_id": user_id, "guild_id": guild_id}).sort("timestamp", -1)
+    async def get_logs_for_user(self, user_id: str, team_id: str) -> list[dict[str, Any]]:
+        cursor = self._collection.find({"user_id": user_id, "team_id": team_id}).sort("timestamp", -1)
         return await cursor.to_list(length=100)
 
 
@@ -178,8 +178,8 @@ class InMemoryRemediationRepository:
     async def add_remediation(self, remediation: RemediationRecord) -> None:
         self._remediations.append(remediation.to_document())
 
-    async def get_remediations_for_user(self, user_id: str, guild_id: str) -> list[dict[str, Any]]:
-        return [r for r in self._remediations if r["user_id"] == user_id and r["guild_id"] == guild_id]
+    async def get_remediations_for_user(self, user_id: str, team_id: str) -> list[dict[str, Any]]:
+        return [r for r in self._remediations if r["user_id"] == user_id and r["team_id"] == team_id]
 
 
 class MongoRemediationRepository:
@@ -189,8 +189,8 @@ class MongoRemediationRepository:
     async def add_remediation(self, remediation: RemediationRecord) -> None:
         await self._collection.insert_one(remediation.to_document())
 
-    async def get_remediations_for_user(self, user_id: str, guild_id: str) -> list[dict[str, Any]]:
-        cursor = self._collection.find({"user_id": user_id, "guild_id": guild_id}).sort("attempted_at", -1)
+    async def get_remediations_for_user(self, user_id: str, team_id: str) -> list[dict[str, Any]]:
+        cursor = self._collection.find({"user_id": user_id, "team_id": team_id}).sort("attempted_at", -1)
         return await cursor.to_list(length=100)
 
 
