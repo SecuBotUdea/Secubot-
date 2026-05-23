@@ -1,0 +1,208 @@
+from __future__ import annotations
+
+from datetime import datetime, timezone
+import logging
+from typing import Any
+
+from motor.motor_asyncio import AsyncIOMotorClient
+
+from app.models.alert import AlertRecord
+from app.models.player import PlayerRecord
+from app.models.point_log import PointLogRecord
+
+logger = logging.getLogger(__name__)
+
+_POINTS_BY_SEVERITY: dict[str, int] = {
+    "critical": 100,
+    "high": 75,
+    "medium": 50,
+    "low": 25,
+}
+
+
+def points_for_severity(severity: str | None) -> int:
+    if severity:
+        return _POINTS_BY_SEVERITY.get(severity.lower(), 10)
+    return 10
+
+
+class AlertNotFoundError(Exception):
+    def __init__(self, alert_id: str) -> None:
+        super().__init__(f"Alert '{alert_id}' not found")
+        self.alert_id = alert_id
+
+
+class AlertAlreadyResolvedError(Exception):
+    def __init__(self, alert_id: str) -> None:
+        super().__init__(f"Alert '{alert_id}' is already resolved")
+        self.alert_id = alert_id
+
+
+class InMemoryAlertRepository:
+    def __init__(self) -> None:
+        self._alerts: dict[str, dict[str, Any]] = {}
+
+    async def upsert_alert(self, alert: AlertRecord) -> None:
+        doc = alert.to_document()
+        existing = self._alerts.get(alert.alert_id)
+        if existing:
+            doc["opened_at"] = existing["opened_at"]
+        self._alerts[alert.alert_id] = doc
+
+    async def get_alert(self, alert_id: str) -> dict[str, Any] | None:
+        return self._alerts.get(alert_id)
+
+    async def resolve_alert(self, alert_id: str, resolved_by: str) -> None:
+        alert = self._alerts.get(alert_id)
+        if alert:
+            alert["status"] = "resolved"
+            alert["resolved_by"] = resolved_by
+            alert["resolved_at"] = datetime.now(timezone.utc)
+
+
+class InMemoryPlayerRepository:
+    def __init__(self) -> None:
+        self._players: dict[str, dict[str, Any]] = {}
+
+    def _key(self, user_id: str, guild_id: str) -> str:
+        return f"{user_id}:{guild_id}"
+
+    async def add_points(self, user_id: str, guild_id: str, points: int) -> None:
+        key = self._key(user_id, guild_id)
+        now = datetime.now(timezone.utc)
+        if key not in self._players:
+            self._players[key] = PlayerRecord(
+                user_id=user_id, guild_id=guild_id, points=0
+            ).to_document()
+            self._players[key]["created_at"] = now
+        self._players[key]["points"] += points
+        self._players[key]["updated_at"] = now
+
+    async def get_player(self, user_id: str, guild_id: str) -> dict[str, Any] | None:
+        return self._players.get(self._key(user_id, guild_id))
+
+    async def get_leaderboard(self, guild_id: str) -> list[dict[str, Any]]:
+        guild_players = [p for p in self._players.values() if p["guild_id"] == guild_id]
+        return sorted(guild_players, key=lambda p: p["points"], reverse=True)
+
+
+class InMemoryPointLogRepository:
+    def __init__(self) -> None:
+        self._logs: list[dict[str, Any]] = []
+
+    async def add_log(self, log: PointLogRecord) -> None:
+        self._logs.append(log.to_document())
+
+    async def get_logs_for_user(self, user_id: str, guild_id: str) -> list[dict[str, Any]]:
+        return [l for l in self._logs if l["user_id"] == user_id and l["guild_id"] == guild_id]
+
+
+class MongoAlertRepository:
+    def __init__(self, collection: Any) -> None:
+        self._collection = collection
+
+    async def upsert_alert(self, alert: AlertRecord) -> None:
+        await self._collection.update_one(
+            {"alert_id": alert.alert_id},
+            {
+                "$set": {
+                    "guild_id": alert.guild_id,
+                    "channel_id": alert.channel_id,
+                    "severity": alert.severity,
+                    "source": alert.source,
+                    "description": alert.description,
+                    "status": alert.status,
+                },
+                "$setOnInsert": {"opened_at": alert.opened_at},
+            },
+            upsert=True,
+        )
+
+    async def get_alert(self, alert_id: str) -> dict[str, Any] | None:
+        return await self._collection.find_one({"alert_id": alert_id})
+
+    async def resolve_alert(self, alert_id: str, resolved_by: str) -> None:
+        await self._collection.update_one(
+            {"alert_id": alert_id},
+            {
+                "$set": {
+                    "status": "resolved",
+                    "resolved_by": resolved_by,
+                    "resolved_at": datetime.now(timezone.utc),
+                }
+            },
+        )
+
+
+class MongoPlayerRepository:
+    def __init__(self, collection: Any) -> None:
+        self._collection = collection
+
+    async def add_points(self, user_id: str, guild_id: str, points: int) -> None:
+        now = datetime.now(timezone.utc)
+        await self._collection.update_one(
+            {"user_id": user_id, "guild_id": guild_id},
+            {
+                "$inc": {"points": points},
+                "$set": {"updated_at": now},
+                "$setOnInsert": {"created_at": now},
+            },
+            upsert=True,
+        )
+
+    async def get_player(self, user_id: str, guild_id: str) -> dict[str, Any] | None:
+        return await self._collection.find_one({"user_id": user_id, "guild_id": guild_id})
+
+    async def get_leaderboard(self, guild_id: str) -> list[dict[str, Any]]:
+        cursor = self._collection.find({"guild_id": guild_id}).sort("points", -1).limit(10)
+        return await cursor.to_list(length=10)
+
+
+class MongoPointLogRepository:
+    def __init__(self, collection: Any) -> None:
+        self._collection = collection
+
+    async def add_log(self, log: PointLogRecord) -> None:
+        await self._collection.insert_one(log.to_document())
+
+    async def get_logs_for_user(self, user_id: str, guild_id: str) -> list[dict[str, Any]]:
+        cursor = self._collection.find({"user_id": user_id, "guild_id": guild_id}).sort("timestamp", -1)
+        return await cursor.to_list(length=100)
+
+
+class DatabaseManager:
+    def __init__(self, database_url: str) -> None:
+        self.database_url = database_url
+        self.client: AsyncIOMotorClient | None = None
+        self.alert_repository: InMemoryAlertRepository | MongoAlertRepository = InMemoryAlertRepository()
+        self.player_repository: InMemoryPlayerRepository | MongoPlayerRepository = InMemoryPlayerRepository()
+        self.point_log_repository: InMemoryPointLogRepository | MongoPointLogRepository = InMemoryPointLogRepository()
+        self.database_connected: bool = False
+        self.using_fallback: bool = True
+
+    async def _connect_mongo(self) -> None:
+        self.client = AsyncIOMotorClient(self.database_url, serverSelectionTimeoutMS=3000)
+        await self.client.admin.command("ping")
+
+    async def connect(self) -> None:
+        if self.database_url.startswith("memory://"):
+            logger.warning("Using in-memory database backend")
+            self.database_connected = True
+            self.using_fallback = True
+            return
+
+        try:
+            await self._connect_mongo()
+            db = self.client.get_default_database()
+            self.alert_repository = MongoAlertRepository(db["alerts"])
+            self.player_repository = MongoPlayerRepository(db["players"])
+            self.point_log_repository = MongoPointLogRepository(db["point_logs"])
+            self.database_connected = True
+            self.using_fallback = False
+        except Exception as exc:  # pragma: no cover
+            logger.exception("Database connection failed, switching to fallback backend: %s", exc)
+            self.alert_repository = InMemoryAlertRepository()
+            self.player_repository = InMemoryPlayerRepository()
+            self.point_log_repository = InMemoryPointLogRepository()
+            self.database_connected = True
+            self.using_fallback = True
