@@ -5,16 +5,18 @@ import logging
 from app.database.connection import AlertAlreadyResolvedError, AlertNotFoundError, points_for_severity
 from app.models.alert import AlertRecord
 from app.models.point_log import PointLogRecord
+from app.models.remediation import RemediationRecord
 from app.schemas.common import AlertPayload, RescanResultPayload
 
 logger = logging.getLogger(__name__)
 
 
 class GamificationService:
-    def __init__(self, alert_repository, player_repository, point_log_repository, gloria_service=None) -> None:
+    def __init__(self, alert_repository, player_repository, point_log_repository, gloria_service=None, remediation_repository=None) -> None:
         self.alert_repository = alert_repository
         self.player_repository = player_repository
         self.point_log_repository = point_log_repository
+        self.remediation_repository = remediation_repository
         self._gloria = gloria_service
 
     async def handle_alert(self, payload: AlertPayload) -> dict:
@@ -40,6 +42,13 @@ class GamificationService:
         channel_id = alert.get("channel_id", "")
 
         if payload.status != "valid":
+            await self._log_remediation(
+                alert_id=payload.alert_id,
+                user_id=payload.user_id,
+                guild_id=guild_id,
+                status=payload.status,
+                points_awarded=0,
+            )
             await self._notify_gloria(
                 guild_id=guild_id,
                 channel_id=channel_id,
@@ -63,6 +72,13 @@ class GamificationService:
                 points=points,
             )
         )
+        await self._log_remediation(
+            alert_id=payload.alert_id,
+            user_id=payload.user_id,
+            guild_id=guild_id,
+            status=payload.status,
+            points_awarded=points,
+        )
 
         await self._notify_gloria(
             guild_id=guild_id,
@@ -74,6 +90,19 @@ class GamificationService:
         )
 
         return {"status": "points_awarded", "points": points, "alert_id": payload.alert_id}
+
+    async def _log_remediation(self, alert_id: str, user_id: str, guild_id: str, status: str, points_awarded: int) -> None:
+        if self.remediation_repository is None:
+            return
+        await self.remediation_repository.add_remediation(
+            RemediationRecord(
+                alert_id=alert_id,
+                user_id=user_id,
+                guild_id=guild_id,
+                status=status,
+                points_awarded=points_awarded,
+            )
+        )
 
     async def _notify_gloria(self, **kwargs) -> None:
         if self._gloria is None:

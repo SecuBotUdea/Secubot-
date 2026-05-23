@@ -31,6 +31,7 @@ async def main() -> None:
         player_repository=database_manager.player_repository,
         point_log_repository=database_manager.point_log_repository,
         gloria_service=gloria_service,
+        remediation_repository=database_manager.remediation_repository,
     )
 
     app = create_app(settings, database_manager, gamification_service)

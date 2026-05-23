@@ -271,3 +271,86 @@ async def test_gamification_already_resolved_alert_raises() -> None:
         await service.handle_rescan_result(
             RescanResultPayload(alert_id="a3", user_id="u2", status="valid")
         )
+
+
+@pytest.mark.asyncio
+async def test_remediation_logged_on_valid_rescan() -> None:
+    from app.services.gamification_service import GamificationService
+    from app.database.connection import (
+        InMemoryAlertRepository,
+        InMemoryPlayerRepository,
+        InMemoryPointLogRepository,
+        InMemoryRemediationRepository,
+    )
+
+    alerts = InMemoryAlertRepository()
+    remediations = InMemoryRemediationRepository()
+    service = GamificationService(
+        alerts, InMemoryPlayerRepository(), InMemoryPointLogRepository(),
+        remediation_repository=remediations,
+    )
+
+    await service.handle_alert(AlertPayload(alert_id="a4", guild_id="g1", severity="high"))
+    await service.handle_rescan_result(RescanResultPayload(alert_id="a4", user_id="u1", status="valid"))
+
+    logs = await remediations.get_remediations_for_user("u1", "g1")
+    assert len(logs) == 1
+    assert logs[0]["status"] == "valid"
+    assert logs[0]["points_awarded"] == 75
+    assert logs[0]["alert_id"] == "a4"
+
+
+@pytest.mark.asyncio
+async def test_remediation_logged_on_invalid_rescan() -> None:
+    from app.services.gamification_service import GamificationService
+    from app.database.connection import (
+        InMemoryAlertRepository,
+        InMemoryPlayerRepository,
+        InMemoryPointLogRepository,
+        InMemoryRemediationRepository,
+    )
+
+    alerts = InMemoryAlertRepository()
+    remediations = InMemoryRemediationRepository()
+    service = GamificationService(
+        alerts, InMemoryPlayerRepository(), InMemoryPointLogRepository(),
+        remediation_repository=remediations,
+    )
+
+    await service.handle_alert(AlertPayload(alert_id="a5", guild_id="g1", severity="medium"))
+    await service.handle_rescan_result(RescanResultPayload(alert_id="a5", user_id="u1", status="invalid"))
+
+    logs = await remediations.get_remediations_for_user("u1", "g1")
+    assert len(logs) == 1
+    assert logs[0]["status"] == "invalid"
+    assert logs[0]["points_awarded"] == 0
+
+
+@pytest.mark.asyncio
+async def test_remediation_logs_multiple_attempts() -> None:
+    from app.services.gamification_service import GamificationService
+    from app.database.connection import (
+        InMemoryAlertRepository,
+        InMemoryPlayerRepository,
+        InMemoryPointLogRepository,
+        InMemoryRemediationRepository,
+    )
+
+    alerts = InMemoryAlertRepository()
+    remediations = InMemoryRemediationRepository()
+    service = GamificationService(
+        alerts, InMemoryPlayerRepository(), InMemoryPointLogRepository(),
+        remediation_repository=remediations,
+    )
+
+    await service.handle_alert(AlertPayload(alert_id="a6", guild_id="g1", severity="low"))
+    await service.handle_rescan_result(RescanResultPayload(alert_id="a6", user_id="u1", status="invalid"))
+    await service.handle_rescan_result(RescanResultPayload(alert_id="a6", user_id="u1", status="invalid"))
+    await service.handle_rescan_result(RescanResultPayload(alert_id="a6", user_id="u1", status="valid"))
+
+    logs = await remediations.get_remediations_for_user("u1", "g1")
+    assert len(logs) == 3
+    assert logs[0]["status"] == "invalid"
+    assert logs[1]["status"] == "invalid"
+    assert logs[2]["status"] == "valid"
+    assert logs[2]["points_awarded"] == 25

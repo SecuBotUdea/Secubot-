@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: secubot-ms-config
+data:
+  HTTP_PORT: "8000"
+  LOG_LEVEL: "INFO"
+  ENVIRONMENT: "production"
+  ALLOWED_ORIGINS: ""
+  GLORIA_URL: "http://gloria-service.default.svc.cluster.local:8000"

@@ -9,6 +9,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from app.models.alert import AlertRecord
 from app.models.player import PlayerRecord
 from app.models.point_log import PointLogRecord
+from app.models.remediation import RemediationRecord
 
 logger = logging.getLogger(__name__)
 
@@ -170,6 +171,29 @@ class MongoPointLogRepository:
         return await cursor.to_list(length=100)
 
 
+class InMemoryRemediationRepository:
+    def __init__(self) -> None:
+        self._remediations: list[dict[str, Any]] = []
+
+    async def add_remediation(self, remediation: RemediationRecord) -> None:
+        self._remediations.append(remediation.to_document())
+
+    async def get_remediations_for_user(self, user_id: str, guild_id: str) -> list[dict[str, Any]]:
+        return [r for r in self._remediations if r["user_id"] == user_id and r["guild_id"] == guild_id]
+
+
+class MongoRemediationRepository:
+    def __init__(self, collection: Any) -> None:
+        self._collection = collection
+
+    async def add_remediation(self, remediation: RemediationRecord) -> None:
+        await self._collection.insert_one(remediation.to_document())
+
+    async def get_remediations_for_user(self, user_id: str, guild_id: str) -> list[dict[str, Any]]:
+        cursor = self._collection.find({"user_id": user_id, "guild_id": guild_id}).sort("attempted_at", -1)
+        return await cursor.to_list(length=100)
+
+
 class DatabaseManager:
     def __init__(self, database_url: str) -> None:
         self.database_url = database_url
@@ -177,6 +201,7 @@ class DatabaseManager:
         self.alert_repository: InMemoryAlertRepository | MongoAlertRepository = InMemoryAlertRepository()
         self.player_repository: InMemoryPlayerRepository | MongoPlayerRepository = InMemoryPlayerRepository()
         self.point_log_repository: InMemoryPointLogRepository | MongoPointLogRepository = InMemoryPointLogRepository()
+        self.remediation_repository: InMemoryRemediationRepository | MongoRemediationRepository = InMemoryRemediationRepository()
         self.database_connected: bool = False
         self.using_fallback: bool = True
 
@@ -197,6 +222,7 @@ class DatabaseManager:
             self.alert_repository = MongoAlertRepository(db["alerts"])
             self.player_repository = MongoPlayerRepository(db["players"])
             self.point_log_repository = MongoPointLogRepository(db["point_logs"])
+            self.remediation_repository = MongoRemediationRepository(db["remediations"])
             self.database_connected = True
             self.using_fallback = False
         except Exception as exc:  # pragma: no cover
