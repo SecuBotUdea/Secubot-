@@ -1,0 +1,58 @@
+name: secubot-ms
+region: nyc
+services:
+  - name: secubot-service
+    # If deploying from GitHub, uncomment and configure the block below:
+    # github:
+    #   repo: your-github-username/your-repo-name
+    #   branch: main
+    #   deploy_on_push: true
+    
+    # Path to build the container using the Dockerfile in the root of the project
+    dockerfile_path: Dockerfile
+    http_port: 8000
+    
+    # Request-based autoscaling (1 to 2 instances of 512MB RAM, 1 shared CPU)
+    # Available on all tiers including shared CPU plans to optimize cost ($5 - $10/mo)
+    autoscaling:
+      min_instance_count: 1
+      max_instance_count: 2
+      metrics:
+        requests_per_second:
+          per_instance: 100
+          
+    instance_size_slug: apps-s-1vcpu-0.5gb
+    
+    routes:
+      - path: /
+      
+    # Health checks configuration (every 30 seconds)
+    health_check:
+      http_path: /health
+      initial_delay_seconds: 30
+      period_seconds: 30
+      timeout_seconds: 5
+      success_threshold: 1
+      failure_threshold: 3
+      
+    # Production environment variables
+    envs:
+      - key: ENVIRONMENT
+        scope: RUN_TIME
+        value: production
+      - key: LOG_LEVEL
+        scope: RUN_TIME
+        value: INFO
+      - key: HTTP_PORT
+        scope: RUN_TIME
+        value: "8000"
+      - key: ALLOWED_ORIGINS
+        scope: RUN_TIME
+        value: "*" # Recommended: change this to your frontend URL in production
+      - key: DATABASE_URL
+        scope: RUN_TIME
+        type: SECRET
+        value: "mongodb+srv://user:password@cluster.mongodb.net/secubot" # Override this in DigitalOcean Dashboard
+      - key: GLORIA_URL
+        scope: RUN_TIME
+        value: "http://gloria:8001" # Adjust if Gloria service is deployed
