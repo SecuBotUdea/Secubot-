@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import ValidationError
 
 from app.schemas.common import HealthResponse, LeaderboardEntry, PlayerDetail, RescanResultPayload
+
+
+logger = logging.getLogger(__name__)
 
 
 def create_app(settings, database_manager, gamification_service) -> FastAPI:
@@ -21,9 +26,28 @@ def create_app(settings, database_manager, gamification_service) -> FastAPI:
         )
 
     @app.post("/events/rescan_result")
-    async def receive_rescan_result(payload: RescanResultPayload) -> dict:
+    async def receive_rescan_result(payload: dict) -> dict:
         try:
-            return await gamification_service.handle_rescan_result(payload)
+            logger.info("SECUBOT recibió: %s", payload)
+            logger.info("Campos esperados: action, alert_id, result, ...")
+            logger.info("Campos recibidos: %s", list(payload.keys()))
+
+            validated_payload = RescanResultPayload.model_validate(payload)
+            if not validated_payload.user_id:
+                logger.warning(
+                    "Payload sin user_id en /events/rescan_result | alert_id=%s team_id=%s",
+                    validated_payload.alert_id,
+                    validated_payload.team_id,
+                )
+                raise HTTPException(
+                    status_code=422,
+                    detail="user_id is required to process rescan_result",
+                )
+
+            return await gamification_service.handle_rescan_result(validated_payload)
+        except ValidationError as exc:
+            logger.exception("Payload inválido en /events/rescan_result: %s", exc.errors())
+            raise HTTPException(status_code=422, detail=exc.errors()) from exc
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"Failed to process rescan result: {exc}") from exc
 

@@ -3,6 +3,7 @@ from fastapi.testclient import TestClient
 
 from app.config.settings import Settings
 from app.database.connection import DatabaseManager
+from app.models.alert import AlertRecord
 from app.http import create_app
 from app.schemas.common import RescanResultPayload
 
@@ -104,6 +105,29 @@ def test_rescan_result_dismissed_no_points(api_client) -> None:
 
     assert response.status_code == 200
     assert response.json()["status"] == "no_points"
+
+
+def test_rescan_result_accepts_jugeared_payload_shape(api_client) -> None:
+    client, service, _ = api_client
+    alert = AlertRecord(
+        alert_id="alert_999",
+        team_id="guild_111",
+        severity="high",
+        source_type="dependabot",
+        title="Critical vulnerability in lodash",
+        status="resolved",
+    )
+    payload = {
+        **alert.model_dump(mode="json"),
+        "team_name": "Team Alpha",
+        "user_id": "user_456",
+    }
+
+    response = client.post("/events/rescan_result", json=payload)
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "points_awarded"
+    assert service.rescan_payloads[0].alert_id == "alert_999"
 
 
 def test_player_detail_endpoint(api_client) -> None:

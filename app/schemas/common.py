@@ -7,18 +7,18 @@ Severity = Literal["critical", "high", "medium", "low", "informational", "unknow
 
 class RescanResultPayload(BaseModel):
     alert_id: str
-    source_type: str
-    source_id: str
-    title: str
+    source_type: str | None = None
+    source_id: str | None = None
+    title: str | None = None
     severity: Severity | None = None
     status: str = Field(description="'fixed' o 'resolved' otorgan puntos; cualquier otro valor se trata como inválido")
-    component: str
+    component: str | None = None
     location: str | None = None
     external_references_score: float | None = None
-    normalized_payload: dict = {}
+    normalized_payload: dict = Field(default_factory=dict)
     team_id: str
-    team_name: str
-    user_id: str
+    team_name: str | None = None
+    user_id: str | None = None
 
 
 class LeaderboardEntry(BaseModel):
