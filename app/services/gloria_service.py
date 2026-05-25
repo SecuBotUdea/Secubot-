@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import httpx
 
+_VALID_STATUSES = {"fixed", "resolved"}
+
 
 class GloriaService:
     _NOTIFY_PATH = "/events/notify"
@@ -13,7 +15,6 @@ class GloriaService:
         self,
         *,
         team_id: str,
-        channel_id: str,
         alert_id: str,
         user_id: str,
         status: str,
@@ -22,15 +23,15 @@ class GloriaService:
         if not self._base_url:
             return
 
-        event_type = "rescan_valid" if status == "valid" else "rescan_invalid"
+        is_valid = status in _VALID_STATUSES
+        event_type = "rescan_valid" if is_valid else "rescan_invalid"
         message_content = (
             f"Alert {alert_id} resolved: {user_id} earned {points} points."
-            if status == "valid"
+            if is_valid
             else f"Alert {alert_id} marked as invalid. No points awarded."
         )
         payload = {
             "team_id": team_id,
-            "channel_id": channel_id,
             "message_content": message_content,
             "embed_data": {
                 "alert_id": alert_id,

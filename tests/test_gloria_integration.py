@@ -1,8 +1,8 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from app.database.connection import InMemoryAlertRepository, InMemoryPlayerRepository, InMemoryPointLogRepository
-from app.schemas.common import AlertPayload, RescanResultPayload
+from app.database.connection import InMemoryPlayerRepository, InMemoryPointLogRepository
+from app.schemas.common import RescanResultPayload
 from app.services.gamification_service import GamificationService
 from app.services.gloria_service import GloriaService
 
@@ -20,11 +20,27 @@ class FakeGloriaService:
 
 def _make_service(gloria=None):
     return GamificationService(
-        InMemoryAlertRepository(),
         InMemoryPlayerRepository(),
         InMemoryPointLogRepository(),
         gloria_service=gloria,
     )
+
+
+def _rescan(**overrides) -> RescanResultPayload:
+    base = dict(
+        alert_id="a1",
+        source_type="dependabot",
+        source_id="42",
+        title="Critical vuln",
+        severity="high",
+        status="fixed",
+        component="package.json",
+        team_id="g1",
+        team_name="Team Alpha",
+        user_id="u1",
+    )
+    base.update(overrides)
+    return RescanResultPayload(**base)
 
 
 @pytest.mark.asyncio
@@ -32,17 +48,27 @@ async def test_gloria_called_on_valid_rescan() -> None:
     gloria = FakeGloriaService()
     service = _make_service(gloria)
 
-    await service.handle_alert(AlertPayload(alert_id="a1", team_id="g1", channel_id="c1", severity="high"))
-    await service.handle_rescan_result(RescanResultPayload(alert_id="a1", user_id="u1", status="valid"))
+    await service.handle_rescan_result(_rescan(status="fixed"))
 
     assert len(gloria.calls) == 1
     call = gloria.calls[0]
     assert call["team_id"] == "g1"
-    assert call["channel_id"] == "c1"
     assert call["alert_id"] == "a1"
     assert call["user_id"] == "u1"
-    assert call["status"] == "valid"
+    assert call["status"] == "fixed"
     assert call["points"] == 75
+
+
+@pytest.mark.asyncio
+async def test_gloria_called_on_resolved_rescan() -> None:
+    gloria = FakeGloriaService()
+    service = _make_service(gloria)
+
+    await service.handle_rescan_result(_rescan(status="resolved"))
+
+    assert len(gloria.calls) == 1
+    assert gloria.calls[0]["status"] == "resolved"
+    assert gloria.calls[0]["points"] == 75
 
 
 @pytest.mark.asyncio
@@ -50,11 +76,10 @@ async def test_gloria_called_on_invalid_rescan() -> None:
     gloria = FakeGloriaService()
     service = _make_service(gloria)
 
-    await service.handle_alert(AlertPayload(alert_id="a2", team_id="g1", channel_id="c1", severity="low"))
-    await service.handle_rescan_result(RescanResultPayload(alert_id="a2", user_id="u1", status="invalid"))
+    await service.handle_rescan_result(_rescan(status="open"))
 
     assert len(gloria.calls) == 1
-    assert gloria.calls[0]["status"] == "invalid"
+    assert gloria.calls[0]["status"] == "open"
     assert gloria.calls[0]["points"] == 0
 
 
@@ -64,8 +89,7 @@ async def test_gloria_failure_does_not_break_points_award() -> None:
     gloria.should_raise = True
     service = _make_service(gloria)
 
-    await service.handle_alert(AlertPayload(alert_id="a3", team_id="g1", channel_id="c1", severity="critical"))
-    result = await service.handle_rescan_result(RescanResultPayload(alert_id="a3", user_id="u1", status="valid"))
+    result = await service.handle_rescan_result(_rescan(severity="critical", status="fixed"))
 
     assert result["status"] == "points_awarded"
     assert result["points"] == 100
@@ -78,8 +102,7 @@ async def test_gloria_failure_does_not_break_points_award() -> None:
 async def test_no_gloria_call_without_service() -> None:
     service = _make_service(gloria=None)
 
-    await service.handle_alert(AlertPayload(alert_id="a4", team_id="g1", severity="medium"))
-    result = await service.handle_rescan_result(RescanResultPayload(alert_id="a4", user_id="u1", status="valid"))
+    result = await service.handle_rescan_result(_rescan(status="fixed"))
 
     assert result["status"] == "points_awarded"
 
@@ -88,7 +111,7 @@ async def test_no_gloria_call_without_service() -> None:
 async def test_gloria_service_no_op_without_url() -> None:
     gloria = GloriaService(gloria_base_url=None)
     await gloria.notify_rescan_result(
-        team_id="g1", channel_id="c1", alert_id="a1", user_id="u1", status="valid", points=75
+        team_id="g1", alert_id="a1", user_id="u1", status="fixed", points=75
     )
 
 
@@ -106,7 +129,7 @@ async def test_gloria_service_sends_correct_payload() -> None:
 
     with patch("app.services.gloria_service.httpx.AsyncClient", return_value=mock_client):
         await gloria.notify_rescan_result(
-            team_id="g1", channel_id="c1", alert_id="a1", user_id="u1", status="valid", points=75
+            team_id="g1", alert_id="a1", user_id="u1", status="fixed", points=75
         )
 
     mock_client.post.assert_called_once()
@@ -116,7 +139,6 @@ async def test_gloria_service_sends_correct_payload() -> None:
     assert payload["source"] == "secubot"
     assert payload["event_type"] == "rescan_valid"
     assert payload["team_id"] == "g1"
-    assert payload["channel_id"] == "c1"
 
 
 @pytest.mark.asyncio
@@ -132,7 +154,7 @@ async def test_gloria_service_event_type_invalid() -> None:
 
     with patch("app.services.gloria_service.httpx.AsyncClient", return_value=mock_client):
         await gloria.notify_rescan_result(
-            team_id="g1", channel_id="c1", alert_id="a1", user_id="u1", status="invalid", points=0
+            team_id="g1", alert_id="a1", user_id="u1", status="open", points=0
         )
 
     payload = mock_client.post.call_args[1]["json"]

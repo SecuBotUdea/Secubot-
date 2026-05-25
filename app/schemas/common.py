@@ -1,23 +1,24 @@
-from typing import Any, Literal
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
 Severity = Literal["critical", "high", "medium", "low", "informational", "unknown"]
 
 
-class AlertPayload(BaseModel):
-    alert_id: str
-    team_id: str
-    channel_id: str | None = None
-    severity: Severity | None = None
-    source_type: str | None = None
-    title: str | None = None
-
-
 class RescanResultPayload(BaseModel):
     alert_id: str
+    source_type: str
+    source_id: str
+    title: str
+    severity: Severity | None = None
+    status: str = Field(description="'fixed' o 'resolved' otorgan puntos; cualquier otro valor se trata como inválido")
+    component: str
+    location: str | None = None
+    external_references_score: float | None = None
+    normalized_payload: dict = {}
+    team_id: str
+    team_name: str
     user_id: str
-    status: str = Field(description="'valid' si la corrección fue aceptada por el Parser, cualquier otro valor se trata como inválido")
 
 
 class LeaderboardEntry(BaseModel):

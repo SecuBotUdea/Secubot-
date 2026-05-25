@@ -4,28 +4,33 @@ from fastapi.testclient import TestClient
 from app.config.settings import Settings
 from app.database.connection import DatabaseManager
 from app.http import create_app
-from app.schemas.common import AlertPayload, RescanResultPayload
+from app.schemas.common import RescanResultPayload
+
+
+def _rescan_payload(**overrides) -> dict:
+    base = {
+        "alert_id": "alert_123",
+        "source_type": "dependabot",
+        "source_id": "42",
+        "title": "Critical vulnerability in lodash",
+        "severity": "high",
+        "status": "fixed",
+        "component": "package.json",
+        "team_id": "guild_111",
+        "team_name": "Team Alpha",
+        "user_id": "user_456",
+    }
+    base.update(overrides)
+    return base
 
 
 class FakeGamificationService:
     def __init__(self) -> None:
-        self.alert_payloads: list[AlertPayload] = []
         self.rescan_payloads: list[RescanResultPayload] = []
-        self.raise_not_found: bool = False
-        self.raise_already_resolved: bool = False
-
-    async def handle_alert(self, payload: AlertPayload) -> dict:
-        self.alert_payloads.append(payload)
-        return {"status": "received", "alert_id": payload.alert_id}
 
     async def handle_rescan_result(self, payload: RescanResultPayload) -> dict:
-        from app.database.connection import AlertAlreadyResolvedError, AlertNotFoundError
-        if self.raise_not_found:
-            raise AlertNotFoundError(payload.alert_id)
-        if self.raise_already_resolved:
-            raise AlertAlreadyResolvedError(payload.alert_id)
         self.rescan_payloads.append(payload)
-        if payload.status == "valid":
+        if payload.status in ("fixed", "resolved"):
             return {"status": "points_awarded", "points": 75, "alert_id": payload.alert_id}
         return {"status": "no_points", "alert_id": payload.alert_id}
 
@@ -66,74 +71,39 @@ def test_health_endpoint(api_client) -> None:
     assert body["database_connected"] is True
 
 
-def test_receive_alert_endpoint(api_client) -> None:
+def test_rescan_result_fixed_awards_points(api_client) -> None:
     client, service, _ = api_client
-    response = client.post(
-        "/events/alert",
-        json={
-            "alert_id": "alert_123",
-            "team_id": "111",
-            "severity": "high",
-            "source_type": "wazuh",
-            "title": "Suspicious login",
-        },
-    )
-
-    assert response.status_code == 200
-    assert response.json() == {"status": "received", "alert_id": "alert_123"}
-    assert service.alert_payloads[0].alert_id == "alert_123"
-
-
-def test_rescan_result_valid(api_client) -> None:
-    client, service, _ = api_client
-    response = client.post(
-        "/events/rescan_result",
-        json={
-            "alert_id": "alert_123",
-            "user_id": "user_456",
-            "status": "valid",
-        },
-    )
+    response = client.post("/events/rescan_result", json=_rescan_payload(status="fixed"))
 
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "points_awarded"
     assert body["points"] == 75
+    assert service.rescan_payloads[0].alert_id == "alert_123"
 
 
-def test_rescan_result_invalid(api_client) -> None:
-    client, service, _ = api_client
-    response = client.post(
-        "/events/rescan_result",
-        json={
-            "alert_id": "alert_123",
-            "user_id": "user_456",
-            "status": "invalid",
-        },
-    )
+def test_rescan_result_resolved_awards_points(api_client) -> None:
+    client, _, _ = api_client
+    response = client.post("/events/rescan_result", json=_rescan_payload(status="resolved"))
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "points_awarded"
+
+
+def test_rescan_result_open_no_points(api_client) -> None:
+    client, _, _ = api_client
+    response = client.post("/events/rescan_result", json=_rescan_payload(status="open"))
 
     assert response.status_code == 200
     assert response.json()["status"] == "no_points"
 
 
-def test_rescan_result_unknown_alert_returns_404(api_client) -> None:
-    client, service, _ = api_client
-    service.raise_not_found = True
-    response = client.post(
-        "/events/rescan_result",
-        json={"alert_id": "unknown", "user_id": "u1", "status": "valid"},
-    )
-    assert response.status_code == 404
+def test_rescan_result_dismissed_no_points(api_client) -> None:
+    client, _, _ = api_client
+    response = client.post("/events/rescan_result", json=_rescan_payload(status="dismissed"))
 
-
-def test_rescan_result_already_resolved_returns_409(api_client) -> None:
-    client, service, _ = api_client
-    service.raise_already_resolved = True
-    response = client.post(
-        "/events/rescan_result",
-        json={"alert_id": "alert_123", "user_id": "u1", "status": "valid"},
-    )
-    assert response.status_code == 409
+    assert response.status_code == 200
+    assert response.json()["status"] == "no_points"
 
 
 def test_player_detail_endpoint(api_client) -> None:
@@ -182,18 +152,25 @@ async def test_database_connection_fallback(monkeypatch) -> None:
 @pytest.mark.asyncio
 async def test_gamification_awards_points_by_severity() -> None:
     from app.services.gamification_service import GamificationService
-    from app.database.connection import InMemoryAlertRepository, InMemoryPlayerRepository, InMemoryPointLogRepository
+    from app.database.connection import InMemoryPlayerRepository, InMemoryPointLogRepository
 
-    alerts = InMemoryAlertRepository()
     players = InMemoryPlayerRepository()
     logs = InMemoryPointLogRepository()
-    service = GamificationService(alerts, players, logs)
+    service = GamificationService(players, logs)
 
-    await service.handle_alert(
-        AlertPayload(alert_id="a1", team_id="g1", severity="critical")
-    )
     result = await service.handle_rescan_result(
-        RescanResultPayload(alert_id="a1", user_id="u1", status="valid")
+        RescanResultPayload(
+            alert_id="a1",
+            source_type="dependabot",
+            source_id="42",
+            title="Critical vuln",
+            severity="critical",
+            status="fixed",
+            component="package.json",
+            team_id="g1",
+            team_name="Team Alpha",
+            user_id="u1",
+        )
     )
 
     assert result["status"] == "points_awarded"
@@ -209,20 +186,27 @@ async def test_gamification_awards_points_by_severity() -> None:
 
 
 @pytest.mark.asyncio
-async def test_gamification_no_points_on_invalid() -> None:
+async def test_gamification_no_points_on_open_status() -> None:
     from app.services.gamification_service import GamificationService
-    from app.database.connection import InMemoryAlertRepository, InMemoryPlayerRepository, InMemoryPointLogRepository
+    from app.database.connection import InMemoryPlayerRepository, InMemoryPointLogRepository
 
-    alerts = InMemoryAlertRepository()
     players = InMemoryPlayerRepository()
     logs = InMemoryPointLogRepository()
-    service = GamificationService(alerts, players, logs)
+    service = GamificationService(players, logs)
 
-    await service.handle_alert(
-        AlertPayload(alert_id="a2", team_id="g1", severity="high")
-    )
     result = await service.handle_rescan_result(
-        RescanResultPayload(alert_id="a2", user_id="u1", status="invalid")
+        RescanResultPayload(
+            alert_id="a2",
+            source_type="dependabot",
+            source_id="42",
+            title="High vuln",
+            severity="high",
+            status="open",
+            component="package.json",
+            team_id="g1",
+            team_name="Team Alpha",
+            user_id="u1",
+        )
     )
 
     assert result["status"] == "no_points"
@@ -231,71 +215,39 @@ async def test_gamification_no_points_on_invalid() -> None:
 
 
 @pytest.mark.asyncio
-async def test_gamification_unknown_alert_raises() -> None:
-    from app.services.gamification_service import GamificationService
-    from app.database.connection import (
-        AlertNotFoundError,
-        InMemoryAlertRepository,
-        InMemoryPlayerRepository,
-        InMemoryPointLogRepository,
-    )
-
-    service = GamificationService(
-        InMemoryAlertRepository(), InMemoryPlayerRepository(), InMemoryPointLogRepository()
-    )
-    with pytest.raises(AlertNotFoundError):
-        await service.handle_rescan_result(
-            RescanResultPayload(alert_id="ghost", user_id="u1", status="valid")
-        )
-
-
-@pytest.mark.asyncio
-async def test_gamification_already_resolved_alert_raises() -> None:
-    from app.services.gamification_service import GamificationService
-    from app.database.connection import (
-        AlertAlreadyResolvedError,
-        InMemoryAlertRepository,
-        InMemoryPlayerRepository,
-        InMemoryPointLogRepository,
-    )
-
-    alerts = InMemoryAlertRepository()
-    service = GamificationService(
-        alerts, InMemoryPlayerRepository(), InMemoryPointLogRepository()
-    )
-
-    await service.handle_alert(AlertPayload(alert_id="a3", team_id="g1", severity="low"))
-    await service.handle_rescan_result(RescanResultPayload(alert_id="a3", user_id="u1", status="valid"))
-
-    with pytest.raises(AlertAlreadyResolvedError):
-        await service.handle_rescan_result(
-            RescanResultPayload(alert_id="a3", user_id="u2", status="valid")
-        )
-
-
-@pytest.mark.asyncio
 async def test_remediation_logged_on_valid_rescan() -> None:
     from app.services.gamification_service import GamificationService
     from app.database.connection import (
-        InMemoryAlertRepository,
         InMemoryPlayerRepository,
         InMemoryPointLogRepository,
         InMemoryRemediationRepository,
     )
 
-    alerts = InMemoryAlertRepository()
     remediations = InMemoryRemediationRepository()
     service = GamificationService(
-        alerts, InMemoryPlayerRepository(), InMemoryPointLogRepository(),
+        InMemoryPlayerRepository(),
+        InMemoryPointLogRepository(),
         remediation_repository=remediations,
     )
 
-    await service.handle_alert(AlertPayload(alert_id="a4", team_id="g1", severity="high"))
-    await service.handle_rescan_result(RescanResultPayload(alert_id="a4", user_id="u1", status="valid"))
+    await service.handle_rescan_result(
+        RescanResultPayload(
+            alert_id="a4",
+            source_type="dependabot",
+            source_id="42",
+            title="High vuln",
+            severity="high",
+            status="fixed",
+            component="package.json",
+            team_id="g1",
+            team_name="Team Alpha",
+            user_id="u1",
+        )
+    )
 
     logs = await remediations.get_remediations_for_user("u1", "g1")
     assert len(logs) == 1
-    assert logs[0]["status"] == "valid"
+    assert logs[0]["status"] == "fixed"
     assert logs[0]["points_awarded"] == 75
     assert logs[0]["alert_id"] == "a4"
 
@@ -304,25 +256,36 @@ async def test_remediation_logged_on_valid_rescan() -> None:
 async def test_remediation_logged_on_invalid_rescan() -> None:
     from app.services.gamification_service import GamificationService
     from app.database.connection import (
-        InMemoryAlertRepository,
         InMemoryPlayerRepository,
         InMemoryPointLogRepository,
         InMemoryRemediationRepository,
     )
 
-    alerts = InMemoryAlertRepository()
     remediations = InMemoryRemediationRepository()
     service = GamificationService(
-        alerts, InMemoryPlayerRepository(), InMemoryPointLogRepository(),
+        InMemoryPlayerRepository(),
+        InMemoryPointLogRepository(),
         remediation_repository=remediations,
     )
 
-    await service.handle_alert(AlertPayload(alert_id="a5", team_id="g1", severity="medium"))
-    await service.handle_rescan_result(RescanResultPayload(alert_id="a5", user_id="u1", status="invalid"))
+    await service.handle_rescan_result(
+        RescanResultPayload(
+            alert_id="a5",
+            source_type="dependabot",
+            source_id="42",
+            title="Medium vuln",
+            severity="medium",
+            status="open",
+            component="package.json",
+            team_id="g1",
+            team_name="Team Alpha",
+            user_id="u1",
+        )
+    )
 
     logs = await remediations.get_remediations_for_user("u1", "g1")
     assert len(logs) == 1
-    assert logs[0]["status"] == "invalid"
+    assert logs[0]["status"] == "open"
     assert logs[0]["points_awarded"] == 0
 
 
@@ -330,27 +293,36 @@ async def test_remediation_logged_on_invalid_rescan() -> None:
 async def test_remediation_logs_multiple_attempts() -> None:
     from app.services.gamification_service import GamificationService
     from app.database.connection import (
-        InMemoryAlertRepository,
         InMemoryPlayerRepository,
         InMemoryPointLogRepository,
         InMemoryRemediationRepository,
     )
 
-    alerts = InMemoryAlertRepository()
     remediations = InMemoryRemediationRepository()
     service = GamificationService(
-        alerts, InMemoryPlayerRepository(), InMemoryPointLogRepository(),
+        InMemoryPlayerRepository(),
+        InMemoryPointLogRepository(),
         remediation_repository=remediations,
     )
 
-    await service.handle_alert(AlertPayload(alert_id="a6", team_id="g1", severity="low"))
-    await service.handle_rescan_result(RescanResultPayload(alert_id="a6", user_id="u1", status="invalid"))
-    await service.handle_rescan_result(RescanResultPayload(alert_id="a6", user_id="u1", status="invalid"))
-    await service.handle_rescan_result(RescanResultPayload(alert_id="a6", user_id="u1", status="valid"))
+    base = dict(
+        alert_id="a6",
+        source_type="dependabot",
+        source_id="42",
+        title="Low vuln",
+        severity="low",
+        component="package.json",
+        team_id="g1",
+        team_name="Team Alpha",
+        user_id="u1",
+    )
+    await service.handle_rescan_result(RescanResultPayload(**base, status="open"))
+    await service.handle_rescan_result(RescanResultPayload(**base, status="open"))
+    await service.handle_rescan_result(RescanResultPayload(**base, status="fixed"))
 
     logs = await remediations.get_remediations_for_user("u1", "g1")
     assert len(logs) == 3
-    assert logs[0]["status"] == "invalid"
-    assert logs[1]["status"] == "invalid"
-    assert logs[2]["status"] == "valid"
+    assert logs[0]["status"] == "open"
+    assert logs[1]["status"] == "open"
+    assert logs[2]["status"] == "fixed"
     assert logs[2]["points_awarded"] == 25

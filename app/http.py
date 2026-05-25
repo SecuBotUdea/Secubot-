@@ -5,8 +5,7 @@ from datetime import datetime, timezone
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.database.connection import AlertAlreadyResolvedError, AlertNotFoundError
-from app.schemas.common import AlertPayload, HealthResponse, LeaderboardEntry, PlayerDetail, RescanResultPayload
+from app.schemas.common import HealthResponse, LeaderboardEntry, PlayerDetail, RescanResultPayload
 
 
 def create_app(settings, database_manager, gamification_service) -> FastAPI:
@@ -21,21 +20,10 @@ def create_app(settings, database_manager, gamification_service) -> FastAPI:
             allow_headers=["Content-Type", "Authorization"],
         )
 
-    @app.post("/events/alert")
-    async def receive_alert(payload: AlertPayload) -> dict:
-        try:
-            return await gamification_service.handle_alert(payload)
-        except Exception as exc:
-            raise HTTPException(status_code=500, detail=f"Failed to process alert: {exc}") from exc
-
     @app.post("/events/rescan_result")
     async def receive_rescan_result(payload: RescanResultPayload) -> dict:
         try:
             return await gamification_service.handle_rescan_result(payload)
-        except AlertNotFoundError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except AlertAlreadyResolvedError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"Failed to process rescan result: {exc}") from exc
 

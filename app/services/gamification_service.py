@@ -2,46 +2,28 @@ from __future__ import annotations
 
 import logging
 
-from app.database.connection import AlertAlreadyResolvedError, AlertNotFoundError, points_for_severity
-from app.models.alert import AlertRecord
+from app.database.connection import points_for_severity
 from app.models.point_log import PointLogRecord
 from app.models.remediation import RemediationRecord
-from app.schemas.common import AlertPayload, RescanResultPayload
+from app.schemas.common import RescanResultPayload
 
 logger = logging.getLogger(__name__)
 
+_VALID_STATUSES = {"fixed", "resolved"}
+
 
 class GamificationService:
-    def __init__(self, alert_repository, player_repository, point_log_repository, gloria_service=None, remediation_repository=None) -> None:
-        self.alert_repository = alert_repository
+    def __init__(self, player_repository, point_log_repository, gloria_service=None, remediation_repository=None) -> None:
         self.player_repository = player_repository
         self.point_log_repository = point_log_repository
         self.remediation_repository = remediation_repository
         self._gloria = gloria_service
 
-    async def handle_alert(self, payload: AlertPayload) -> dict:
-        alert = AlertRecord(
-            alert_id=payload.alert_id,
-            team_id=payload.team_id,
-            channel_id=payload.channel_id,
-            severity=payload.severity,
-            source_type=payload.source_type,
-            title=payload.title,
-        )
-        await self.alert_repository.upsert_alert(alert)
-        return {"status": "received", "alert_id": payload.alert_id}
-
     async def handle_rescan_result(self, payload: RescanResultPayload) -> dict:
-        alert = await self.alert_repository.get_alert(payload.alert_id)
-        if alert is None:
-            raise AlertNotFoundError(payload.alert_id)
-        if alert.get("status") == "resolved":
-            raise AlertAlreadyResolvedError(payload.alert_id)
+        team_id = payload.team_id
+        is_valid = payload.status in _VALID_STATUSES
 
-        team_id = alert.get("team_id", "")
-        channel_id = alert.get("channel_id", "")
-
-        if payload.status != "valid":
+        if not is_valid:
             await self._log_remediation(
                 alert_id=payload.alert_id,
                 user_id=payload.user_id,
@@ -51,7 +33,6 @@ class GamificationService:
             )
             await self._notify_gloria(
                 team_id=team_id,
-                channel_id=channel_id,
                 alert_id=payload.alert_id,
                 user_id=payload.user_id,
                 status=payload.status,
@@ -59,11 +40,9 @@ class GamificationService:
             )
             return {"status": "no_points", "alert_id": payload.alert_id}
 
-        severity = alert.get("severity")
-        points = points_for_severity(severity)
+        points = points_for_severity(payload.severity)
 
         await self.player_repository.add_points(payload.user_id, team_id, points)
-        await self.alert_repository.resolve_alert(payload.alert_id, resolved_by=payload.user_id)
         await self.point_log_repository.add_log(
             PointLogRecord(
                 user_id=payload.user_id,
@@ -79,10 +58,8 @@ class GamificationService:
             status=payload.status,
             points_awarded=points,
         )
-
         await self._notify_gloria(
             team_id=team_id,
-            channel_id=channel_id,
             alert_id=payload.alert_id,
             user_id=payload.user_id,
             status=payload.status,

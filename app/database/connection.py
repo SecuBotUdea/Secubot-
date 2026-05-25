@@ -6,7 +6,6 @@ from typing import Any
 
 from motor.motor_asyncio import AsyncIOMotorClient
 
-from app.models.alert import AlertRecord
 from app.models.player import PlayerRecord
 from app.models.point_log import PointLogRecord
 from app.models.remediation import RemediationRecord
@@ -25,40 +24,6 @@ def points_for_severity(severity: str | None) -> int:
     if severity:
         return _POINTS_BY_SEVERITY.get(severity.lower(), 10)
     return 10
-
-
-class AlertNotFoundError(Exception):
-    def __init__(self, alert_id: str) -> None:
-        super().__init__(f"Alert '{alert_id}' not found")
-        self.alert_id = alert_id
-
-
-class AlertAlreadyResolvedError(Exception):
-    def __init__(self, alert_id: str) -> None:
-        super().__init__(f"Alert '{alert_id}' is already resolved")
-        self.alert_id = alert_id
-
-
-class InMemoryAlertRepository:
-    def __init__(self) -> None:
-        self._alerts: dict[str, dict[str, Any]] = {}
-
-    async def upsert_alert(self, alert: AlertRecord) -> None:
-        doc = alert.to_document()
-        existing = self._alerts.get(alert.alert_id)
-        if existing:
-            doc["opened_at"] = existing["opened_at"]
-        self._alerts[alert.alert_id] = doc
-
-    async def get_alert(self, alert_id: str) -> dict[str, Any] | None:
-        return self._alerts.get(alert_id)
-
-    async def resolve_alert(self, alert_id: str, resolved_by: str) -> None:
-        alert = self._alerts.get(alert_id)
-        if alert:
-            alert["status"] = "resolved"
-            alert["resolved_by"] = resolved_by
-            alert["resolved_at"] = datetime.now(timezone.utc)
 
 
 class InMemoryPlayerRepository:
@@ -96,43 +61,6 @@ class InMemoryPointLogRepository:
 
     async def get_logs_for_user(self, user_id: str, team_id: str) -> list[dict[str, Any]]:
         return [l for l in self._logs if l["user_id"] == user_id and l["team_id"] == team_id]
-
-
-class MongoAlertRepository:
-    def __init__(self, collection: Any) -> None:
-        self._collection = collection
-
-    async def upsert_alert(self, alert: AlertRecord) -> None:
-        await self._collection.update_one(
-            {"alert_id": alert.alert_id},
-            {
-                "$set": {
-                    "team_id": alert.team_id,
-                    "channel_id": alert.channel_id,
-                    "severity": alert.severity,
-                    "source_type": alert.source_type,
-                    "title": alert.title,
-                    "status": alert.status,
-                },
-                "$setOnInsert": {"opened_at": alert.opened_at},
-            },
-            upsert=True,
-        )
-
-    async def get_alert(self, alert_id: str) -> dict[str, Any] | None:
-        return await self._collection.find_one({"alert_id": alert_id})
-
-    async def resolve_alert(self, alert_id: str, resolved_by: str) -> None:
-        await self._collection.update_one(
-            {"alert_id": alert_id},
-            {
-                "$set": {
-                    "status": "resolved",
-                    "resolved_by": resolved_by,
-                    "resolved_at": datetime.now(timezone.utc),
-                }
-            },
-        )
 
 
 class MongoPlayerRepository:
@@ -198,7 +126,6 @@ class DatabaseManager:
     def __init__(self, database_url: str) -> None:
         self.database_url = database_url
         self.client: AsyncIOMotorClient | None = None
-        self.alert_repository: InMemoryAlertRepository | MongoAlertRepository = InMemoryAlertRepository()
         self.player_repository: InMemoryPlayerRepository | MongoPlayerRepository = InMemoryPlayerRepository()
         self.point_log_repository: InMemoryPointLogRepository | MongoPointLogRepository = InMemoryPointLogRepository()
         self.remediation_repository: InMemoryRemediationRepository | MongoRemediationRepository = InMemoryRemediationRepository()
@@ -219,7 +146,6 @@ class DatabaseManager:
         try:
             await self._connect_mongo()
             db = self.client.get_default_database()
-            self.alert_repository = MongoAlertRepository(db["alerts"])
             self.player_repository = MongoPlayerRepository(db["players"])
             self.point_log_repository = MongoPointLogRepository(db["point_logs"])
             self.remediation_repository = MongoRemediationRepository(db["remediations"])
@@ -227,7 +153,6 @@ class DatabaseManager:
             self.using_fallback = False
         except Exception as exc:  # pragma: no cover
             logger.exception("Database connection failed, switching to fallback backend: %s", exc)
-            self.alert_repository = InMemoryAlertRepository()
             self.player_repository = InMemoryPlayerRepository()
             self.point_log_repository = InMemoryPointLogRepository()
             self.database_connected = True

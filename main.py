@@ -27,7 +27,6 @@ async def main() -> None:
 
     gloria_service = GloriaService(settings.gloria_base_url)
     gamification_service = GamificationService(
-        alert_repository=database_manager.alert_repository,
         player_repository=database_manager.player_repository,
         point_log_repository=database_manager.point_log_repository,
         gloria_service=gloria_service,
