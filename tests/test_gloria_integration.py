@@ -134,15 +134,17 @@ async def test_gloria_service_sends_correct_payload() -> None:
 
     mock_client.post.assert_called_once()
     url, kwargs = mock_client.post.call_args[0][0], mock_client.post.call_args[1]
-    assert url == "http://gloria:8001/events/notify"
+    assert url == "http://gloria:8001/gamification/"
     payload = kwargs["json"]
-    assert payload["source"] == "secubot"
-    assert payload["event_type"] == "rescan_valid"
+    assert payload["alert_id"] == "a1"
     assert payload["team_id"] == "g1"
+    assert payload["points_awarded"] is True
+    assert payload["points"] == 75
+    assert "message" in payload
 
 
 @pytest.mark.asyncio
-async def test_gloria_service_event_type_invalid() -> None:
+async def test_gloria_service_points_awarded_false_on_invalid() -> None:
     gloria = GloriaService(gloria_base_url="http://gloria:8001")
 
     mock_response = MagicMock()
@@ -158,4 +160,5 @@ async def test_gloria_service_event_type_invalid() -> None:
         )
 
     payload = mock_client.post.call_args[1]["json"]
-    assert payload["event_type"] == "rescan_invalid"
+    assert payload["points_awarded"] is False
+    assert payload["points"] == 0

@@ -6,7 +6,7 @@ _VALID_STATUSES = {"fixed", "resolved"}
 
 
 class GloriaService:
-    _NOTIFY_PATH = "/events/notify"
+    _NOTIFY_PATH = "/gamification/"
 
     def __init__(self, gloria_base_url: str | None) -> None:
         self._base_url = gloria_base_url
@@ -24,23 +24,17 @@ class GloriaService:
             return
 
         is_valid = status in _VALID_STATUSES
-        event_type = "rescan_valid" if is_valid else "rescan_invalid"
-        message_content = (
+        message = (
             f"Alert {alert_id} resolved: {user_id} earned {points} points."
             if is_valid
             else f"Alert {alert_id} marked as invalid. No points awarded."
         )
         payload = {
+            "alert_id": alert_id,
             "team_id": team_id,
-            "message_content": message_content,
-            "embed_data": {
-                "alert_id": alert_id,
-                "user_id": user_id,
-                "points": points,
-                "status": status,
-            },
-            "source": "secubot",
-            "event_type": event_type,
+            "points_awarded": is_valid,
+            "points": points,
+            "message": message,
         }
 
         async with httpx.AsyncClient(timeout=10) as client:
