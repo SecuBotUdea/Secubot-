@@ -38,7 +38,7 @@ class GamificationService:
                 status=payload.status,
                 points=0,
             )
-            return {"status": "no_points", "alert_id": payload.alert_id}
+            return {"status": "no_points", "alert_id": payload.alert_id, "user_id": payload.user_id}
 
         points = points_for_severity(payload.severity)
 
@@ -66,7 +66,12 @@ class GamificationService:
             points=points,
         )
 
-        return {"status": "points_awarded", "points": points, "alert_id": payload.alert_id}
+        return {
+            "status": "points_awarded",
+            "points": points,
+            "alert_id": payload.alert_id,
+            "user_id": payload.user_id,
+        }
 
     async def _log_remediation(self, alert_id: str, user_id: str, team_id: str, status: str, points_awarded: int) -> None:
         if self.remediation_repository is None:

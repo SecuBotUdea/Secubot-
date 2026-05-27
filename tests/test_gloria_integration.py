@@ -138,6 +138,7 @@ async def test_gloria_service_sends_correct_payload() -> None:
     payload = kwargs["json"]
     assert payload["alert_id"] == "a1"
     assert payload["team_id"] == "g1"
+    assert payload["user_id"] == "u1"
     assert payload["points_awarded"] is True
     assert payload["points"] == 75
     assert "message" in payload
@@ -162,3 +163,4 @@ async def test_gloria_service_points_awarded_false_on_invalid() -> None:
     payload = mock_client.post.call_args[1]["json"]
     assert payload["points_awarded"] is False
     assert payload["points"] == 0
+    assert payload["user_id"] == "u1"

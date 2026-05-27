@@ -27,11 +27,12 @@ class GloriaService:
         message = (
             f"Alert {alert_id} resolved: {user_id} earned {points} points."
             if is_valid
-            else f"Alert {alert_id} marked as invalid. No points awarded."
+            else f"Alert {alert_id} marked as invalid for user {user_id}. No points awarded."
         )
         payload = {
             "alert_id": alert_id,
             "team_id": team_id,
+            "user_id": user_id,
             "points_awarded": is_valid,
             "points": points,
             "message": message,

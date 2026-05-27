@@ -32,8 +32,13 @@ class FakeGamificationService:
     async def handle_rescan_result(self, payload: RescanResultPayload) -> dict:
         self.rescan_payloads.append(payload)
         if payload.status in ("fixed", "resolved"):
-            return {"status": "points_awarded", "points": 75, "alert_id": payload.alert_id}
-        return {"status": "no_points", "alert_id": payload.alert_id}
+            return {
+                "status": "points_awarded",
+                "points": 75,
+                "alert_id": payload.alert_id,
+                "user_id": payload.user_id,
+            }
+        return {"status": "no_points", "alert_id": payload.alert_id, "user_id": payload.user_id}
 
     async def get_player_detail(self, team_id: str, user_id: str) -> dict | None:
         if user_id == "unknown":
@@ -80,6 +85,7 @@ def test_rescan_result_fixed_awards_points(api_client) -> None:
     body = response.json()
     assert body["status"] == "points_awarded"
     assert body["points"] == 75
+    assert body["user_id"] == "user_456"
     assert service.rescan_payloads[0].alert_id == "alert_123"
 
 
@@ -88,7 +94,9 @@ def test_rescan_result_resolved_awards_points(api_client) -> None:
     response = client.post("/events/rescan_result", json=_rescan_payload(status="resolved"))
 
     assert response.status_code == 200
-    assert response.json()["status"] == "points_awarded"
+    body = response.json()
+    assert body["status"] == "points_awarded"
+    assert body["user_id"] == "user_456"
 
 
 def test_rescan_result_open_no_points(api_client) -> None:
@@ -96,7 +104,9 @@ def test_rescan_result_open_no_points(api_client) -> None:
     response = client.post("/events/rescan_result", json=_rescan_payload(status="open"))
 
     assert response.status_code == 200
-    assert response.json()["status"] == "no_points"
+    body = response.json()
+    assert body["status"] == "no_points"
+    assert body["user_id"] == "user_456"
 
 
 def test_rescan_result_dismissed_no_points(api_client) -> None:
@@ -104,7 +114,9 @@ def test_rescan_result_dismissed_no_points(api_client) -> None:
     response = client.post("/events/rescan_result", json=_rescan_payload(status="dismissed"))
 
     assert response.status_code == 200
-    assert response.json()["status"] == "no_points"
+    body = response.json()
+    assert body["status"] == "no_points"
+    assert body["user_id"] == "user_456"
 
 
 def test_rescan_result_accepts_jugeared_payload_shape(api_client) -> None:
@@ -126,7 +138,9 @@ def test_rescan_result_accepts_jugeared_payload_shape(api_client) -> None:
     response = client.post("/events/rescan_result", json=payload)
 
     assert response.status_code == 200
-    assert response.json()["status"] == "points_awarded"
+    body = response.json()
+    assert body["status"] == "points_awarded"
+    assert body["user_id"] == "user_456"
     assert service.rescan_payloads[0].alert_id == "alert_999"
 
 
