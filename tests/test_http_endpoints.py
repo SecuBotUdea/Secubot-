@@ -363,4 +363,207 @@ async def test_remediation_logs_multiple_attempts() -> None:
     assert logs[0]["status"] == "open"
     assert logs[1]["status"] == "open"
     assert logs[2]["status"] == "fixed"
-    assert logs[2]["points_awarded"] == 25
+    # 2 intentos inválidos previos → penalización 20 pts sobre base 25 → 5 pts
+    assert logs[2]["points_awarded"] == 5
+
+
+@pytest.mark.asyncio
+async def test_speed_bonus_under_6h() -> None:
+    from datetime import timedelta
+    from app.services.gamification_service import GamificationService
+    from app.database.connection import InMemoryPlayerRepository, InMemoryPointLogRepository
+
+    players = InMemoryPlayerRepository()
+    service = GamificationService(players, InMemoryPointLogRepository())
+
+    from datetime import datetime, timezone
+    opened_at = datetime.now(timezone.utc) - timedelta(hours=2)
+
+    result = await service.handle_rescan_result(
+        RescanResultPayload(
+            alert_id="a7",
+            severity="high",
+            status="fixed",
+            team_id="g1",
+            user_id="u1",
+            opened_at=opened_at,
+        )
+    )
+
+    # high (75) × 1.5 (< 6h) = 112
+    assert result["status"] == "points_awarded"
+    assert result["points"] == 112
+    assert result["breakdown"]["speed_multiplier"] == 1.5
+
+
+@pytest.mark.asyncio
+async def test_speed_no_bonus_after_72h() -> None:
+    from datetime import timedelta, datetime, timezone
+    from app.services.gamification_service import GamificationService
+    from app.database.connection import InMemoryPlayerRepository, InMemoryPointLogRepository
+
+    service = GamificationService(InMemoryPlayerRepository(), InMemoryPointLogRepository())
+
+    opened_at = datetime.now(timezone.utc) - timedelta(hours=80)
+    result = await service.handle_rescan_result(
+        RescanResultPayload(
+            alert_id="a8",
+            severity="high",
+            status="fixed",
+            team_id="g1",
+            user_id="u1",
+            opened_at=opened_at,
+        )
+    )
+
+    assert result["points"] == 75
+    assert result["breakdown"]["speed_multiplier"] == 1.0
+
+
+@pytest.mark.asyncio
+async def test_score_multiplier_high() -> None:
+    from app.services.gamification_service import GamificationService
+    from app.database.connection import InMemoryPlayerRepository, InMemoryPointLogRepository
+
+    service = GamificationService(InMemoryPlayerRepository(), InMemoryPointLogRepository())
+
+    result = await service.handle_rescan_result(
+        RescanResultPayload(
+            alert_id="a9",
+            severity="high",
+            status="fixed",
+            team_id="g1",
+            user_id="u1",
+            external_references_score=0.85,
+        )
+    )
+
+    # high (75) × 1.5 (score >= 0.7) = 112
+    assert result["points"] == 112
+    assert result["breakdown"]["score_multiplier"] == 1.5
+
+
+@pytest.mark.asyncio
+async def test_score_multiplier_medium() -> None:
+    from app.services.gamification_service import GamificationService
+    from app.database.connection import InMemoryPlayerRepository, InMemoryPointLogRepository
+
+    service = GamificationService(InMemoryPlayerRepository(), InMemoryPointLogRepository())
+
+    result = await service.handle_rescan_result(
+        RescanResultPayload(
+            alert_id="a10",
+            severity="medium",
+            status="fixed",
+            team_id="g1",
+            user_id="u1",
+            external_references_score=0.55,
+        )
+    )
+
+    # medium (50) × 1.2 (score 0.4-0.7) = 60
+    assert result["points"] == 60
+    assert result["breakdown"]["score_multiplier"] == 1.2
+
+
+@pytest.mark.asyncio
+async def test_penalty_reduces_points_on_valid_after_invalid() -> None:
+    from app.services.gamification_service import GamificationService
+    from app.database.connection import (
+        InMemoryPlayerRepository,
+        InMemoryPointLogRepository,
+        InMemoryRemediationRepository,
+    )
+
+    remediations = InMemoryRemediationRepository()
+    service = GamificationService(
+        InMemoryPlayerRepository(),
+        InMemoryPointLogRepository(),
+        remediation_repository=remediations,
+    )
+
+    base = dict(alert_id="a11", severity="critical", team_id="g1", user_id="u1")
+    await service.handle_rescan_result(RescanResultPayload(**base, status="open"))
+    result = await service.handle_rescan_result(RescanResultPayload(**base, status="fixed"))
+
+    # critical (100) - penalización 1 intento (10) = 90
+    assert result["points"] == 90
+    assert result["breakdown"]["penalty"] == 10
+
+
+@pytest.mark.asyncio
+async def test_penalty_capped_at_max() -> None:
+    from app.services.gamification_service import GamificationService
+    from app.database.connection import (
+        InMemoryPlayerRepository,
+        InMemoryPointLogRepository,
+        InMemoryRemediationRepository,
+    )
+
+    remediations = InMemoryRemediationRepository()
+    service = GamificationService(
+        InMemoryPlayerRepository(),
+        InMemoryPointLogRepository(),
+        remediation_repository=remediations,
+    )
+
+    base = dict(alert_id="a12", severity="critical", team_id="g1", user_id="u1")
+    for _ in range(5):
+        await service.handle_rescan_result(RescanResultPayload(**base, status="open"))
+    result = await service.handle_rescan_result(RescanResultPayload(**base, status="fixed"))
+
+    # penalización capped en 30 pts → 100 - 30 = 70
+    assert result["breakdown"]["penalty"] == 30
+    assert result["points"] == 70
+
+
+@pytest.mark.asyncio
+async def test_penalty_minimum_one_point() -> None:
+    from app.services.gamification_service import GamificationService
+    from app.database.connection import (
+        InMemoryPlayerRepository,
+        InMemoryPointLogRepository,
+        InMemoryRemediationRepository,
+    )
+
+    remediations = InMemoryRemediationRepository()
+    service = GamificationService(
+        InMemoryPlayerRepository(),
+        InMemoryPointLogRepository(),
+        remediation_repository=remediations,
+    )
+
+    base = dict(alert_id="a13", severity="low", team_id="g1", user_id="u1")
+    for _ in range(5):
+        await service.handle_rescan_result(RescanResultPayload(**base, status="open"))
+    result = await service.handle_rescan_result(RescanResultPayload(**base, status="fixed"))
+
+    # low (25) - cap 30 = -5, pero mínimo 1
+    assert result["points"] == 1
+
+
+@pytest.mark.asyncio
+async def test_combined_speed_and_score_multipliers() -> None:
+    from datetime import timedelta, datetime, timezone
+    from app.services.gamification_service import GamificationService
+    from app.database.connection import InMemoryPlayerRepository, InMemoryPointLogRepository
+
+    service = GamificationService(InMemoryPlayerRepository(), InMemoryPointLogRepository())
+
+    opened_at = datetime.now(timezone.utc) - timedelta(hours=2)
+    result = await service.handle_rescan_result(
+        RescanResultPayload(
+            alert_id="a14",
+            severity="critical",
+            status="fixed",
+            team_id="g1",
+            user_id="u1",
+            opened_at=opened_at,
+            external_references_score=0.9,
+        )
+    )
+
+    # critical (100) × 1.5 (< 6h) × 1.5 (score >= 0.7) = 225
+    assert result["points"] == 225
+    assert result["breakdown"]["speed_multiplier"] == 1.5
+    assert result["breakdown"]["score_multiplier"] == 1.5

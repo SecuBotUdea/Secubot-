@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -19,6 +20,7 @@ class RescanResultPayload(BaseModel):
     team_id: str
     team_name: str | None = None
     user_id: str | None = None
+    opened_at: datetime | None = Field(default=None, description="Timestamp de cuando se abrió la alerta; usado para calcular bonus de velocidad")
 
 
 class LeaderboardEntry(BaseModel):

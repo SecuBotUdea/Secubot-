@@ -99,6 +99,9 @@ class MongoPointLogRepository:
         return await cursor.to_list(length=100)
 
 
+_VALID_STATUSES = {"fixed", "resolved"}
+
+
 class InMemoryRemediationRepository:
     def __init__(self) -> None:
         self._remediations: list[dict[str, Any]] = []
@@ -108,6 +111,12 @@ class InMemoryRemediationRepository:
 
     async def get_remediations_for_user(self, user_id: str, team_id: str) -> list[dict[str, Any]]:
         return [r for r in self._remediations if r["user_id"] == user_id and r["team_id"] == team_id]
+
+    async def count_invalid_attempts(self, alert_id: str, user_id: str) -> int:
+        return sum(
+            1 for r in self._remediations
+            if r["alert_id"] == alert_id and r["user_id"] == user_id and r["status"] not in _VALID_STATUSES
+        )
 
 
 class MongoRemediationRepository:
@@ -120,6 +129,13 @@ class MongoRemediationRepository:
     async def get_remediations_for_user(self, user_id: str, team_id: str) -> list[dict[str, Any]]:
         cursor = self._collection.find({"user_id": user_id, "team_id": team_id}).sort("attempted_at", -1)
         return await cursor.to_list(length=100)
+
+    async def count_invalid_attempts(self, alert_id: str, user_id: str) -> int:
+        return await self._collection.count_documents({
+            "alert_id": alert_id,
+            "user_id": user_id,
+            "status": {"$nin": list(_VALID_STATUSES)},
+        })
 
 
 class DatabaseManager:

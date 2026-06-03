@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 
 from app.database.connection import points_for_severity
 from app.models.point_log import PointLogRecord
@@ -10,6 +11,33 @@ from app.schemas.common import RescanResultPayload
 logger = logging.getLogger(__name__)
 
 _VALID_STATUSES = {"fixed", "resolved"}
+_PENALTY_PER_ATTEMPT = 10
+_MAX_PENALTY = 30
+
+
+def _speed_multiplier(opened_at: datetime | None) -> float:
+    if opened_at is None:
+        return 1.0
+    now = datetime.now(timezone.utc)
+    aware = opened_at.replace(tzinfo=timezone.utc) if opened_at.tzinfo is None else opened_at
+    elapsed_hours = (now - aware).total_seconds() / 3600
+    if elapsed_hours < 6:
+        return 1.5
+    if elapsed_hours < 24:
+        return 1.25
+    if elapsed_hours < 72:
+        return 1.1
+    return 1.0
+
+
+def _score_multiplier(external_references_score: float | None) -> float:
+    if external_references_score is None:
+        return 1.0
+    if external_references_score >= 0.7:
+        return 1.5
+    if external_references_score >= 0.4:
+        return 1.2
+    return 1.0
 
 
 class GamificationService:
@@ -40,7 +68,18 @@ class GamificationService:
             )
             return {"status": "no_points", "alert_id": payload.alert_id, "user_id": payload.user_id}
 
-        points = points_for_severity(payload.severity)
+        # Contar intentos inválidos previos ANTES de registrar el actual
+        invalid_attempts = 0
+        if self.remediation_repository is not None:
+            invalid_attempts = await self.remediation_repository.count_invalid_attempts(
+                payload.alert_id, payload.user_id
+            )
+
+        base = points_for_severity(payload.severity)
+        speed_mult = _speed_multiplier(payload.opened_at)
+        score_mult = _score_multiplier(payload.external_references_score)
+        penalty = min(_MAX_PENALTY, invalid_attempts * _PENALTY_PER_ATTEMPT)
+        points = max(1, round(base * speed_mult * score_mult) - penalty)
 
         await self.player_repository.add_points(payload.user_id, team_id, points)
         await self.point_log_repository.add_log(
@@ -71,6 +110,12 @@ class GamificationService:
             "points": points,
             "alert_id": payload.alert_id,
             "user_id": payload.user_id,
+            "breakdown": {
+                "base": base,
+                "speed_multiplier": speed_mult,
+                "score_multiplier": score_mult,
+                "penalty": penalty,
+            },
         }
 
     async def _log_remediation(self, alert_id: str, user_id: str, team_id: str, status: str, points_awarded: int) -> None:
