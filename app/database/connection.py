@@ -118,6 +118,12 @@ class InMemoryRemediationRepository:
             if r["alert_id"] == alert_id and r["user_id"] == user_id and r["status"] not in _VALID_STATUSES
         )
 
+    async def has_valid_remediation(self, alert_id: str) -> bool:
+        return any(
+            r["alert_id"] == alert_id and r["status"] in _VALID_STATUSES
+            for r in self._remediations
+        )
+
 
 class MongoRemediationRepository:
     def __init__(self, collection: Any) -> None:
@@ -136,6 +142,13 @@ class MongoRemediationRepository:
             "user_id": user_id,
             "status": {"$nin": list(_VALID_STATUSES)},
         })
+
+    async def has_valid_remediation(self, alert_id: str) -> bool:
+        doc = await self._collection.find_one({
+            "alert_id": alert_id,
+            "status": {"$in": list(_VALID_STATUSES)},
+        })
+        return doc is not None
 
 
 class DatabaseManager:

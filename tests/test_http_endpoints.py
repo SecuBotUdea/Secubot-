@@ -363,8 +363,8 @@ async def test_remediation_logs_multiple_attempts() -> None:
     assert logs[0]["status"] == "open"
     assert logs[1]["status"] == "open"
     assert logs[2]["status"] == "fixed"
-    # 2 intentos inválidos previos → penalización 20 pts sobre base 25 → 5 pts
-    assert logs[2]["points_awarded"] == 5
+    # 2 intentos inválidos previos → penalización 40 pts sobre base 25 → mínimo 1
+    assert logs[2]["points_awarded"] == 1
 
 
 @pytest.mark.asyncio
@@ -486,9 +486,9 @@ async def test_penalty_reduces_points_on_valid_after_invalid() -> None:
     await service.handle_rescan_result(RescanResultPayload(**base, status="open"))
     result = await service.handle_rescan_result(RescanResultPayload(**base, status="fixed"))
 
-    # critical (100) - penalización 1 intento (10) = 90
-    assert result["points"] == 90
-    assert result["breakdown"]["penalty"] == 10
+    # critical (100) - penalización 1 intento (20) = 80
+    assert result["points"] == 80
+    assert result["breakdown"]["penalty"] == 20
 
 
 @pytest.mark.asyncio
@@ -512,9 +512,9 @@ async def test_penalty_capped_at_max() -> None:
         await service.handle_rescan_result(RescanResultPayload(**base, status="open"))
     result = await service.handle_rescan_result(RescanResultPayload(**base, status="fixed"))
 
-    # penalización capped en 30 pts → 100 - 30 = 70
-    assert result["breakdown"]["penalty"] == 30
-    assert result["points"] == 70
+    # penalización capped en 60 pts → 100 - 60 = 40
+    assert result["breakdown"]["penalty"] == 60
+    assert result["points"] == 40
 
 
 @pytest.mark.asyncio
@@ -538,7 +538,7 @@ async def test_penalty_minimum_one_point() -> None:
         await service.handle_rescan_result(RescanResultPayload(**base, status="open"))
     result = await service.handle_rescan_result(RescanResultPayload(**base, status="fixed"))
 
-    # low (25) - cap 30 = -5, pero mínimo 1
+    # low (25) - cap 60 = -35, pero mínimo 1
     assert result["points"] == 1
 
 
@@ -567,3 +567,61 @@ async def test_combined_speed_and_score_multipliers() -> None:
     assert result["points"] == 225
     assert result["breakdown"]["speed_multiplier"] == 1.5
     assert result["breakdown"]["score_multiplier"] == 1.5
+
+
+@pytest.mark.asyncio
+async def test_duplicate_rescan_no_extra_points() -> None:
+    from app.services.gamification_service import GamificationService
+    from app.database.connection import (
+        InMemoryPlayerRepository,
+        InMemoryPointLogRepository,
+        InMemoryRemediationRepository,
+    )
+
+    players = InMemoryPlayerRepository()
+    remediations = InMemoryRemediationRepository()
+    service = GamificationService(players, InMemoryPointLogRepository(), remediation_repository=remediations)
+
+    payload = RescanResultPayload(
+        alert_id="dup_alert",
+        severity="high",
+        status="fixed",
+        team_id="g1",
+        user_id="u1",
+    )
+
+    first = await service.handle_rescan_result(payload)
+    assert first["status"] == "points_awarded"
+    assert first["points"] == 75
+
+    second = await service.handle_rescan_result(payload)
+    assert second["status"] == "already_resolved"
+
+    player = await players.get_player("u1", "g1")
+    assert player["points"] == 75
+
+
+@pytest.mark.asyncio
+async def test_duplicate_rescan_different_user_no_extra_points() -> None:
+    from app.services.gamification_service import GamificationService
+    from app.database.connection import (
+        InMemoryPlayerRepository,
+        InMemoryPointLogRepository,
+        InMemoryRemediationRepository,
+    )
+
+    players = InMemoryPlayerRepository()
+    remediations = InMemoryRemediationRepository()
+    service = GamificationService(players, InMemoryPointLogRepository(), remediation_repository=remediations)
+
+    await service.handle_rescan_result(
+        RescanResultPayload(alert_id="shared_alert", severity="high", status="fixed", team_id="g1", user_id="u1")
+    )
+
+    result = await service.handle_rescan_result(
+        RescanResultPayload(alert_id="shared_alert", severity="high", status="fixed", team_id="g1", user_id="u2")
+    )
+    assert result["status"] == "already_resolved"
+
+    p2 = await players.get_player("u2", "g1")
+    assert p2 is None

@@ -11,8 +11,8 @@ from app.schemas.common import RescanResultPayload
 logger = logging.getLogger(__name__)
 
 _VALID_STATUSES = {"fixed", "resolved"}
-_PENALTY_PER_ATTEMPT = 10
-_MAX_PENALTY = 30
+_PENALTY_PER_ATTEMPT = 20
+_MAX_PENALTY = 60
 
 
 def _speed_multiplier(opened_at: datetime | None) -> float:
@@ -52,6 +52,13 @@ class GamificationService:
         is_valid = payload.status in _VALID_STATUSES
 
         if not is_valid:
+            prev_invalid = 0
+            if self.remediation_repository is not None:
+                prev_invalid = await self.remediation_repository.count_invalid_attempts(
+                    payload.alert_id, payload.user_id
+                )
+            accumulated_penalty = min(_MAX_PENALTY, (prev_invalid + 1) * _PENALTY_PER_ATTEMPT)
+
             await self._log_remediation(
                 alert_id=payload.alert_id,
                 user_id=payload.user_id,
@@ -65,8 +72,26 @@ class GamificationService:
                 user_id=payload.user_id,
                 status=payload.status,
                 points=0,
+                penalty_so_far=accumulated_penalty,
             )
-            return {"status": "no_points", "alert_id": payload.alert_id, "user_id": payload.user_id}
+            return {
+                "status": "no_points",
+                "alert_id": payload.alert_id,
+                "user_id": payload.user_id,
+                "penalty_so_far": accumulated_penalty,
+            }
+
+        if self.remediation_repository is not None:
+            already_resolved = await self.remediation_repository.has_valid_remediation(payload.alert_id)
+            if already_resolved:
+                await self._notify_gloria(
+                    team_id=team_id,
+                    alert_id=payload.alert_id,
+                    user_id=payload.user_id,
+                    status="already_resolved",
+                    points=0,
+                )
+                return {"status": "already_resolved", "alert_id": payload.alert_id, "user_id": payload.user_id}
 
         # Contar intentos inválidos previos ANTES de registrar el actual
         invalid_attempts = 0
@@ -131,11 +156,18 @@ class GamificationService:
             )
         )
 
-    async def _notify_gloria(self, **kwargs) -> None:
+    async def _notify_gloria(self, *, team_id: str, alert_id: str, user_id: str, status: str, points: int, penalty_so_far: int = 0) -> None:
         if self._gloria is None:
             return
         try:
-            await self._gloria.notify_rescan_result(**kwargs)
+            await self._gloria.notify_rescan_result(
+                team_id=team_id,
+                alert_id=alert_id,
+                user_id=user_id,
+                status=status,
+                points=points,
+                penalty_so_far=penalty_so_far,
+            )
         except Exception:
             logger.exception("Failed to notify Gloria; rescan result was already persisted")
 

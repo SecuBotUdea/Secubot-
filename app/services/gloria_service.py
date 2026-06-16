@@ -19,16 +19,23 @@ class GloriaService:
         user_id: str,
         status: str,
         points: int,
+        penalty_so_far: int = 0,
     ) -> None:
         if not self._base_url:
             return
 
         is_valid = status in _VALID_STATUSES
-        message = (
-            f"Alert {alert_id} resolved: {user_id} earned {points} points."
-            if is_valid
-            else f"Alert {alert_id} marked as invalid for user {user_id}. No points awarded."
-        )
+        if is_valid:
+            message = f"Alert {alert_id} resolved: {user_id} earned {points} points."
+        elif status == "already_resolved":
+            message = f"Alert {alert_id} was already resolved. No additional points awarded."
+        elif penalty_so_far > 0:
+            message = (
+                f"Alert {alert_id} not resolved yet for {user_id}. "
+                f"Accumulated penalty: -{penalty_so_far} pts (will reduce your resolution reward)."
+            )
+        else:
+            message = f"Alert {alert_id} marked as invalid for user {user_id}. No points awarded."
         payload = {
             "alert_id": alert_id,
             "team_id": team_id,
